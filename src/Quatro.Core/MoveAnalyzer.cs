@@ -256,17 +256,19 @@ public static class MoveAnalyzer
         }
 
         int indexShuffled = IndexShuffle[turn];
+        int branchCount = 16 - turn;
         
-        // Use parallel processing at early turns where we have more branches
-        // At turn 0, we have 16 choices; at turn 1, 15 choices, etc.
-        // Parallelize the first few turns for maximum CPU utilization
-        if (turn < 3)
+        // Use parallel processing when we have enough branches to justify overhead
+        // Parallelize at early turns (0-4) where there's significant work per branch
+        // At turn 4, branchCount is 12, still good for parallelization
+        if (turn < 5 && branchCount >= 8)
         {
             long p1Wins = 0, p2Wins = 0, draws = 0;
             
+            // Use 2x processor count for better throughput on CPU-bound work
             var parallelOptions = new ParallelOptions
             {
-                MaxDegreeOfParallelism = Environment.ProcessorCount
+                MaxDegreeOfParallelism = Environment.ProcessorCount * 2
             };
 
             try
@@ -429,9 +431,10 @@ public static class MoveAnalyzer
 
         long p1Wins = 0, p2Wins = 0, draws = 0;
         
+        // Use 2x processor count for better throughput on CPU-bound work
         var parallelOptions = new ParallelOptions
         {
-            MaxDegreeOfParallelism = Environment.ProcessorCount
+            MaxDegreeOfParallelism = Environment.ProcessorCount * 2
         };
 
         try

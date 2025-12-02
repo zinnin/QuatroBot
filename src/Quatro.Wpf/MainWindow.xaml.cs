@@ -17,13 +17,24 @@ public partial class MainWindow : Window
     private readonly Button[] _pieceButtons = new Button[16];
     private bool _analysisEnabled = false;
     private CancellationTokenSource? _analysisCts;
+    private BotPlayer? _player1Bot = null;
+    private BotPlayer? _player2Bot = null;
+    private System.Windows.Threading.DispatcherTimer? _botMoveTimer;
 
     public MainWindow()
     {
         InitializeComponent();
         InitializeBoard();
         InitializePieces();
+        InitializeBotTimer();
         UpdateUI();
+    }
+
+    private void InitializeBotTimer()
+    {
+        _botMoveTimer = new System.Windows.Threading.DispatcherTimer();
+        _botMoveTimer.Interval = TimeSpan.FromMilliseconds(500); // Delay for visual feedback
+        _botMoveTimer.Tick += BotMoveTimer_Tick;
     }
 
     private void InitializeBoard()
@@ -400,6 +411,133 @@ public partial class MainWindow : Window
         {
             var currentPlayer = _gameState.IsPlayer1Turn ? 1 : 2;
             StatusText.Text = $"Player {currentPlayer}: Select a piece to give";
+        }
+
+        // Check if we should trigger a bot move
+        TriggerBotMoveIfNeeded();
+    }
+
+    private void Player1Level_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is MenuItem menuItem && menuItem.Tag is string levelStr)
+        {
+            int level = int.Parse(levelStr);
+            _player1Bot = new BotPlayer((BotLevel)level);
+            
+            // Update menu checkmarks
+            Player1HumanMenuItem.IsChecked = false;
+            Player1Level1MenuItem.IsChecked = level == 1;
+            Player1Level2MenuItem.IsChecked = level == 2;
+            Player1Level3MenuItem.IsChecked = level == 3;
+            Player1Level4MenuItem.IsChecked = level == 4;
+            Player1Level5MenuItem.IsChecked = level == 5;
+            
+            // Trigger bot move if it's player 1's turn
+            TriggerBotMoveIfNeeded();
+        }
+    }
+
+    private void Player1Human_Click(object sender, RoutedEventArgs e)
+    {
+        _player1Bot = null;
+        Player1HumanMenuItem.IsChecked = true;
+        Player1Level1MenuItem.IsChecked = false;
+        Player1Level2MenuItem.IsChecked = false;
+        Player1Level3MenuItem.IsChecked = false;
+        Player1Level4MenuItem.IsChecked = false;
+        Player1Level5MenuItem.IsChecked = false;
+    }
+
+    private void Player2Level_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is MenuItem menuItem && menuItem.Tag is string levelStr)
+        {
+            int level = int.Parse(levelStr);
+            _player2Bot = new BotPlayer((BotLevel)level);
+            
+            // Update menu checkmarks
+            Player2HumanMenuItem.IsChecked = false;
+            Player2Level1MenuItem.IsChecked = level == 1;
+            Player2Level2MenuItem.IsChecked = level == 2;
+            Player2Level3MenuItem.IsChecked = level == 3;
+            Player2Level4MenuItem.IsChecked = level == 4;
+            Player2Level5MenuItem.IsChecked = level == 5;
+            
+            // Trigger bot move if it's player 2's turn
+            TriggerBotMoveIfNeeded();
+        }
+    }
+
+    private void Player2Human_Click(object sender, RoutedEventArgs e)
+    {
+        _player2Bot = null;
+        Player2HumanMenuItem.IsChecked = true;
+        Player2Level1MenuItem.IsChecked = false;
+        Player2Level2MenuItem.IsChecked = false;
+        Player2Level3MenuItem.IsChecked = false;
+        Player2Level4MenuItem.IsChecked = false;
+        Player2Level5MenuItem.IsChecked = false;
+    }
+
+    private void TriggerBotMoveIfNeeded()
+    {
+        if (_gameState.IsGameOver)
+            return;
+
+        var currentBot = _gameState.IsPlayer1Turn ? _player1Bot : _player2Bot;
+        
+        if (currentBot != null && _botMoveTimer != null && !_botMoveTimer.IsEnabled)
+        {
+            _botMoveTimer.Start();
+        }
+    }
+
+    private async void BotMoveTimer_Tick(object? sender, EventArgs e)
+    {
+        _botMoveTimer?.Stop();
+
+        if (_gameState.IsGameOver)
+            return;
+
+        var currentBot = _gameState.IsPlayer1Turn ? _player1Bot : _player2Bot;
+        
+        if (currentBot == null)
+            return;
+
+        try
+        {
+            if (_gameState.PieceToPlay.HasValue)
+            {
+                // Bot needs to place the piece
+                StatusText.Text = $"Player {(_gameState.IsPlayer1Turn ? 1 : 2)} (Bot): Thinking...";
+                
+                // Run bot decision on background thread
+                var placement = await Task.Run(() => currentBot.SelectPlacement(_gameState));
+                
+                // Make the move on UI thread
+                _gameState.PlacePiece(placement.row, placement.col);
+                UpdateUI();
+            }
+            else
+            {
+                // Bot needs to select a piece
+                StatusText.Text = $"Player {(_gameState.IsPlayer1Turn ? 1 : 2)} (Bot): Thinking...";
+                
+                // Run bot decision on background thread
+                var piece = await Task.Run(() => currentBot.SelectPieceToGive(_gameState));
+                
+                // Make the move on UI thread
+                _gameState.GivePiece(piece);
+                UpdateUI();
+            }
+        }
+        catch (InvalidOperationException ex)
+        {
+            MessageBox.Show($"Bot made an invalid move: {ex.Message}", "Bot Error", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"Unexpected bot error: {ex.Message}\n\nPlease restart the game.", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
         }
     }
 }

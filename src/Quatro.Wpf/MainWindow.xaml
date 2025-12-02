@@ -10,6 +10,26 @@
     <DockPanel>
         <!-- Menu Bar -->
         <Menu DockPanel.Dock="Top" Background="#3E3E42" Foreground="White">
+            <MenuItem Header="_Player 1" Foreground="White">
+                <MenuItem x:Name="Player1BotMenuItem" Header="_Bot" Foreground="Black">
+                    <MenuItem x:Name="Player1Level1MenuItem" Header="Level _1" Click="Player1Level_Click" Tag="1" Foreground="Black"/>
+                    <MenuItem x:Name="Player1Level2MenuItem" Header="Level _2" Click="Player1Level_Click" Tag="2" Foreground="Black"/>
+                    <MenuItem x:Name="Player1Level3MenuItem" Header="Level _3" Click="Player1Level_Click" Tag="3" Foreground="Black"/>
+                    <MenuItem x:Name="Player1Level4MenuItem" Header="Level _4" Click="Player1Level_Click" Tag="4" Foreground="Black"/>
+                    <MenuItem x:Name="Player1Level5MenuItem" Header="Level _5" Click="Player1Level_Click" Tag="5" Foreground="Black"/>
+                </MenuItem>
+                <MenuItem x:Name="Player1HumanMenuItem" Header="_Human" Click="Player1Human_Click" IsChecked="True" Foreground="Black"/>
+            </MenuItem>
+            <MenuItem Header="_Player 2" Foreground="White">
+                <MenuItem x:Name="Player2BotMenuItem" Header="_Bot" Foreground="Black">
+                    <MenuItem x:Name="Player2Level1MenuItem" Header="Level _1" Click="Player2Level_Click" Tag="1" Foreground="Black"/>
+                    <MenuItem x:Name="Player2Level2MenuItem" Header="Level _2" Click="Player2Level_Click" Tag="2" Foreground="Black"/>
+                    <MenuItem x:Name="Player2Level3MenuItem" Header="Level _3" Click="Player2Level_Click" Tag="3" Foreground="Black"/>
+                    <MenuItem x:Name="Player2Level4MenuItem" Header="Level _4" Click="Player2Level_Click" Tag="4" Foreground="Black"/>
+                    <MenuItem x:Name="Player2Level5MenuItem" Header="Level _5" Click="Player2Level_Click" Tag="5" Foreground="Black"/>
+                </MenuItem>
+                <MenuItem x:Name="Player2HumanMenuItem" Header="_Human" Click="Player2Human_Click" IsChecked="True" Foreground="Black"/>
+            </MenuItem>
             <MenuItem Header="_View" Foreground="White">
                 <MenuItem x:Name="ShowAnalysisMenuItem" 
                           Header="_Show Move Analysis" 

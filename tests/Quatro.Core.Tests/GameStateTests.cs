@@ -68,8 +68,8 @@ public class GameStateTests
         Assert.True(state.PlacePiece(0, 0));
         Assert.Equal(5, state.Board[0, 0]);
         Assert.Null(state.PieceToPlay);
-        // After P2 places, turn switches back to P1
-        Assert.True(state.IsPlayer1Turn);
+        // After P2 places, turn stays with P2 (to select next piece)
+        Assert.False(state.IsPlayer1Turn);
     }
 
     [Fact]
@@ -110,7 +110,7 @@ public class GameStateTests
         state.PlacePiece(0, 3);
 
         Assert.True(state.IsGameOver);
-        Assert.Equal(2, state.Winner); // Player 2 won (they placed the last piece)
+        Assert.Equal(1, state.Winner); // Player 1 won (with corrected turn logic, P1 placed the last piece)
     }
 
     [Fact]

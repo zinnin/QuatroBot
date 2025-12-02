@@ -117,7 +117,7 @@ public class GameState
         }
 
         PieceToPlay = null;
-        IsPlayer1Turn = !IsPlayer1Turn;
+        // Turn doesn't switch after placing - same player selects next piece
         return true;
     }
 

@@ -1,6 +1,4 @@
-﻿using System.Configuration;
-using System.Data;
-using System.Windows;
+﻿using System.Windows;
 
 namespace Quatro.Wpf;
 
@@ -10,4 +8,3 @@ namespace Quatro.Wpf;
 public partial class App : Application
 {
 }
-

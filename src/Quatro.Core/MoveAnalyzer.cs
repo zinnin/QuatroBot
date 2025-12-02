@@ -1226,16 +1226,18 @@ public static class MoveAnalyzer
                         var testState = gameState.Clone();
                         testState.GivePiece(piece);
                         
-                        var opponentResult = EvaluateMinimaxFromGameState(testState, cancellationToken);
+                        // After GivePiece, turn doesn't switch - same player will place
+                        // So result is from current player's perspective, not opponent's
+                        var resultAfterGiving = EvaluateMinimaxFromGameState(testState, cancellationToken);
                         
-                        if (opponentResult == MinimaxResult.Lose)
+                        if (resultAfterGiving == MinimaxResult.Win)
                         {
                             Interlocked.Exchange(ref bestResult, 1);
                             loopState.Stop();
                             return;
                         }
                         
-                        if (opponentResult == MinimaxResult.Draw)
+                        if (resultAfterGiving == MinimaxResult.Draw)
                             Interlocked.Exchange(ref foundDraw, 1);
                     });
                 }
@@ -1261,13 +1263,15 @@ public static class MoveAnalyzer
                     var testState = gameState.Clone();
                     testState.GivePiece(piece);
                     
-                    var opponentResult = EvaluateMinimaxFromGameState(testState, cancellationToken);
+                    // After GivePiece, turn doesn't switch - same player will place
+                    // So result is from current player's perspective, not opponent's
+                    var resultAfterGiving = EvaluateMinimaxFromGameState(testState, cancellationToken);
                     
-                    if (opponentResult == MinimaxResult.Unknown)
+                    if (resultAfterGiving == MinimaxResult.Unknown)
                         return MinimaxResult.Unknown;
-                    if (opponentResult == MinimaxResult.Lose)
+                    if (resultAfterGiving == MinimaxResult.Win)
                         return MinimaxResult.Win;
-                    if (opponentResult == MinimaxResult.Draw)
+                    if (resultAfterGiving == MinimaxResult.Draw)
                         hasDraw = true;
                 }
                 

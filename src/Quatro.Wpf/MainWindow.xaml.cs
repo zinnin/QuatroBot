@@ -342,6 +342,10 @@ public partial class MainWindow : Window
 
     private void UpdateUI()
     {
+        // Determine if current player is a bot
+        var currentBot = _gameState.IsPlayer1Turn ? _player1Bot : _player2Bot;
+        bool isBotTurn = currentBot != null && !_gameState.IsGameOver;
+
         // Update board
         for (int i = 0; i < 16; i++)
         {
@@ -356,6 +360,12 @@ public partial class MainWindow : Window
                 _boardButtons[i].Content = CreatePieceVisual(new Piece(cellValue));
                 _boardButtons[i].Background = new SolidColorBrush(Color.FromRgb(0x40, 0x40, 0x44));
             }
+            
+            // Disable board cells when it's bot's turn or cell is occupied
+            _boardButtons[i].IsEnabled = !isBotTurn && 
+                                         _gameState.PieceToPlay.HasValue && 
+                                         cellValue == Board.EmptyCell &&
+                                         !_gameState.IsGameOver;
         }
 
         // Highlight winning line
@@ -372,10 +382,14 @@ public partial class MainWindow : Window
         for (byte i = 0; i < 16; i++)
         {
             var piece = new Piece(i);
-            _pieceButtons[i].IsEnabled = _gameState.IsPieceAvailable(piece) && 
+            bool isAvailable = _gameState.IsPieceAvailable(piece);
+            
+            // Disable piece buttons when it's bot's turn
+            _pieceButtons[i].IsEnabled = !isBotTurn &&
+                                          isAvailable && 
                                           !_gameState.PieceToPlay.HasValue &&
                                           !_gameState.IsGameOver;
-            _pieceButtons[i].Opacity = _gameState.IsPieceAvailable(piece) ? 1.0 : 0.3;
+            _pieceButtons[i].Opacity = isAvailable ? 1.0 : 0.3;
         }
 
         // Update selected piece display

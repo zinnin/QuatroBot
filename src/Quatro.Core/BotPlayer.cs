@@ -73,13 +73,12 @@ public class BotPlayer
     }
 
     /// <summary>
-    /// Early game piece selection: random, but avoid giving winning pieces.
+    /// Filters pieces to find those that DON'T allow opponent to win immediately.
+    /// Returns the safe pieces if any exist, otherwise returns all pieces.
     /// </summary>
-    private Piece SelectPieceEarlyGame(GameState gameState, List<Piece> availablePieces)
+    private List<Piece> FilterSafePieces(GameState gameState, List<Piece> availablePieces)
     {
         var emptyCells = gameState.Board.GetEmptyCells().ToList();
-        
-        // Find pieces that DON'T allow opponent to win immediately
         var safePieces = new List<Piece>();
         
         foreach (var piece in availablePieces)
@@ -104,12 +103,17 @@ public class BotPlayer
                 safePieces.Add(piece);
         }
         
-        // If we have safe pieces, pick one randomly
-        if (safePieces.Count > 0)
-            return safePieces[_random.Next(safePieces.Count)];
-        
-        // Otherwise, we must give an unsafe piece (opponent will win)
-        return availablePieces[_random.Next(availablePieces.Count)];
+        // If we have safe pieces, return those; otherwise return all pieces
+        return safePieces.Count > 0 ? safePieces : availablePieces;
+    }
+
+    /// <summary>
+    /// Early game piece selection: random, but avoid giving winning pieces.
+    /// </summary>
+    private Piece SelectPieceEarlyGame(GameState gameState, List<Piece> availablePieces)
+    {
+        var piecesToChooseFrom = FilterSafePieces(gameState, availablePieces);
+        return piecesToChooseFrom[_random.Next(piecesToChooseFrom.Count)];
     }
 
     /// <summary>
@@ -139,10 +143,18 @@ public class BotPlayer
     /// </summary>
     private Piece SelectPieceLateGame(GameState gameState, List<Piece> availablePieces)
     {
+        // For levels 4 and 5, filter out pieces that allow opponent to win immediately
+        List<Piece> piecesToAnalyze = availablePieces;
+        
+        if (_level == BotLevel.Level4 || _level == BotLevel.Level5)
+        {
+            piecesToAnalyze = FilterSafePieces(gameState, availablePieces);
+        }
+        
         // Analyze each piece to get win/loss/draw counts
         var pieceAnalysis = new List<(Piece piece, GameOutcomes outcomes)>();
         
-        foreach (var piece in availablePieces)
+        foreach (var piece in piecesToAnalyze)
         {
             var outcomes = MoveAnalyzer.AnalyzePieceSelection(gameState, piece);
             pieceAnalysis.Add((piece, outcomes));

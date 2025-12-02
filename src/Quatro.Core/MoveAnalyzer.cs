@@ -92,6 +92,11 @@ public static class MoveAnalyzer
     private static readonly ConcurrentDictionary<long, MinimaxResult>[] MinimaxCache;
 
     /// <summary>
+    /// Cache for rational play analysis. Key is derived from GameState bytes.
+    /// </summary>
+    private static readonly ConcurrentDictionary<long, GameOutcomes> RationalCache = new();
+
+    /// <summary>
     /// Winning line masks for efficient evaluation.
     /// Each mask covers 4 positions (4 bits each = 16 bits total per line).
     /// </summary>
@@ -422,7 +427,7 @@ public static class MoveAnalyzer
         var testState = gameState.Clone();
         testState.GivePiece(piece);
         
-        return AnalyzeFromGameState(testState, cancellationToken);
+        return AnalyzeFromGameStateRational(testState, cancellationToken);
     }
 
     /// <summary>
@@ -453,7 +458,7 @@ public static class MoveAnalyzer
                 return new GameOutcomes(0, 1, 0);
         }
         
-        return AnalyzeFromGameState(testState, cancellationToken);
+        return AnalyzeFromGameStateRational(testState, cancellationToken);
     }
 
     /// <summary>
@@ -527,6 +532,243 @@ public static class MoveAnalyzer
         }
         
         return new GameOutcomes(p1Wins, p2Wins, draws);
+    }
+
+    /// <summary>
+    /// Analyzes game outcomes assuming rational play - players always take winning moves.
+    /// This dramatically reduces the search space by pruning branches where a player
+    /// has a winning move but doesn't take it.
+    /// </summary>
+    public static GameOutcomes AnalyzeFromGameStateRational(GameState gameState, CancellationToken cancellationToken = default)
+    {
+        // Use the internal method with depth 0 (top level)
+        return AnalyzeFromGameStateRationalInternal(gameState, 0, cancellationToken);
+    }
+    
+    /// <summary>
+    /// Internal implementation with depth tracking for controlling parallelization.
+    /// </summary>
+    private static GameOutcomes AnalyzeFromGameStateRationalInternal(GameState gameState, int depth, CancellationToken cancellationToken)
+    {
+        if (cancellationToken.IsCancellationRequested)
+            return new GameOutcomes(0, 0, 0);
+
+        if (gameState.IsGameOver)
+        {
+            if (gameState.Winner == 1)
+                return new GameOutcomes(1, 0, 0);
+            else if (gameState.Winner == 2)
+                return new GameOutcomes(0, 1, 0);
+            else
+                return new GameOutcomes(0, 0, 1);
+        }
+
+        // Generate cache key from game state
+        // Use a hash of the serialized state for efficient lookup
+        var stateBytes = gameState.ToBytes();
+        long cacheKey = GenerateCacheKey(stateBytes);
+        
+        // Check cache first
+        if (RationalCache.TryGetValue(cacheKey, out var cached))
+            return cached;
+
+        // Only use parallel processing for the first few levels of recursion
+        // This prevents thread pool saturation and improves CPU utilization
+        bool useParallel = depth < 3;
+        
+        // Use parallel options for CPU-bound work
+        var parallelOptions = new ParallelOptions
+        {
+            MaxDegreeOfParallelism = Environment.ProcessorCount
+        };
+
+        GameOutcomes result;
+
+        if (gameState.PieceToPlay.HasValue)
+        {
+            // Current player needs to place the piece
+            // RATIONAL PLAY: Check if any placement wins - if so, player WILL take it
+            var emptyCells = gameState.Board.GetEmptyCells().ToList();
+            
+            // First, check for any winning placements (this is the key optimization)
+            foreach (var cell in emptyCells)
+            {
+                var testState = gameState.Clone();
+                testState.PlacePiece(cell.Row, cell.Col);
+                
+                if (testState.IsGameOver && testState.Winner != 0)
+                {
+                    // Current player has a winning move - they WILL take it
+                    result = testState.Winner == 1 
+                        ? new GameOutcomes(1, 0, 0) 
+                        : new GameOutcomes(0, 1, 0);
+                    RationalCache.TryAdd(cacheKey, result);
+                    return result;
+                }
+            }
+            
+            // No winning move - explore all non-winning placements
+            long p1Wins = 0, p2Wins = 0, draws = 0;
+            
+            if (useParallel && emptyCells.Count > 1)
+            {
+                try
+                {
+                    Parallel.ForEach(emptyCells, parallelOptions, (cell, loopState) =>
+                    {
+                        if (cancellationToken.IsCancellationRequested)
+                        {
+                            loopState.Stop();
+                            return;
+                        }
+                        
+                        var testState = gameState.Clone();
+                        testState.PlacePiece(cell.Row, cell.Col);
+                        
+                        // We already checked for wins above, so this is not a winning placement
+                        var cellResult = AnalyzeFromGameStateRationalInternal(testState, depth + 1, cancellationToken);
+                        Interlocked.Add(ref p1Wins, cellResult.Player1Wins);
+                        Interlocked.Add(ref p2Wins, cellResult.Player2Wins);
+                        Interlocked.Add(ref draws, cellResult.Draws);
+                    });
+                }
+                catch (OperationCanceledException)
+                {
+                    // Gracefully handle cancellation
+                }
+            }
+            else
+            {
+                // Sequential processing for deeper levels
+                foreach (var cell in emptyCells)
+                {
+                    if (cancellationToken.IsCancellationRequested)
+                        break;
+                    
+                    var testState = gameState.Clone();
+                    testState.PlacePiece(cell.Row, cell.Col);
+                    
+                    var cellResult = AnalyzeFromGameStateRationalInternal(testState, depth + 1, cancellationToken);
+                    p1Wins += cellResult.Player1Wins;
+                    p2Wins += cellResult.Player2Wins;
+                    draws += cellResult.Draws;
+                }
+            }
+            
+            result = new GameOutcomes(p1Wins, p2Wins, draws);
+        }
+        else
+        {
+            // Current player needs to select a piece to give to opponent
+            // RATIONAL PLAY: Don't give a piece that allows opponent to win immediately
+            // (unless there's no other choice)
+            var availablePieces = gameState.GetAvailablePieces().ToList();
+            var emptyCells = gameState.Board.GetEmptyCells().ToList();
+            
+            // Filter pieces: find pieces that DON'T allow opponent to win immediately
+            var safePieces = new List<Piece>();
+            var unsafePieces = new List<Piece>();
+            
+            foreach (var piece in availablePieces)
+            {
+                bool allowsOpponentWin = false;
+                
+                // Check if giving this piece allows opponent to win
+                foreach (var cell in emptyCells)
+                {
+                    var testState = gameState.Clone();
+                    testState.GivePiece(piece);
+                    testState.PlacePiece(cell.Row, cell.Col);
+                    
+                    if (testState.IsGameOver && testState.Winner != 0)
+                    {
+                        allowsOpponentWin = true;
+                        break;
+                    }
+                }
+                
+                if (allowsOpponentWin)
+                    unsafePieces.Add(piece);
+                else
+                    safePieces.Add(piece);
+            }
+            
+            // Use safe pieces if available, otherwise must use unsafe pieces
+            var piecesToAnalyze = safePieces.Count > 0 ? safePieces : unsafePieces;
+            
+            long p1Wins = 0, p2Wins = 0, draws = 0;
+            
+            if (useParallel && piecesToAnalyze.Count > 1)
+            {
+                try
+                {
+                    Parallel.ForEach(piecesToAnalyze, parallelOptions, (piece, loopState) =>
+                    {
+                        if (cancellationToken.IsCancellationRequested)
+                        {
+                            loopState.Stop();
+                            return;
+                        }
+                        
+                        var testState = gameState.Clone();
+                        testState.GivePiece(piece);
+                        
+                        var pieceResult = AnalyzeFromGameStateRationalInternal(testState, depth + 1, cancellationToken);
+                        Interlocked.Add(ref p1Wins, pieceResult.Player1Wins);
+                        Interlocked.Add(ref p2Wins, pieceResult.Player2Wins);
+                        Interlocked.Add(ref draws, pieceResult.Draws);
+                    });
+                }
+                catch (OperationCanceledException)
+                {
+                    // Gracefully handle cancellation
+                }
+            }
+            else
+            {
+                // Sequential processing for deeper levels
+                foreach (var piece in piecesToAnalyze)
+                {
+                    if (cancellationToken.IsCancellationRequested)
+                        break;
+                    
+                    var testState = gameState.Clone();
+                    testState.GivePiece(piece);
+                    
+                    var pieceResult = AnalyzeFromGameStateRationalInternal(testState, depth + 1, cancellationToken);
+                    p1Wins += pieceResult.Player1Wins;
+                    p2Wins += pieceResult.Player2Wins;
+                    draws += pieceResult.Draws;
+                }
+            }
+            
+            result = new GameOutcomes(p1Wins, p2Wins, draws);
+        }
+        
+        // Cache the result before returning
+        if (!cancellationToken.IsCancellationRequested)
+            RationalCache.TryAdd(cacheKey, result);
+            
+        return result;
+    }
+    
+    /// <summary>
+    /// Generates a cache key from the game state bytes.
+    /// Uses a fast hash function for efficient lookup.
+    /// </summary>
+    private static long GenerateCacheKey(byte[] stateBytes)
+    {
+        // Use a more robust hash combining algorithm (FNV-1a inspired)
+        unchecked
+        {
+            long hash = -3750763034362895579L; // FNV offset basis as signed long
+            foreach (byte b in stateBytes)
+            {
+                hash ^= b;
+                hash *= 1099511628211L; // FNV prime
+            }
+            return hash;
+        }
     }
 
     /// <summary>
@@ -681,6 +923,7 @@ public static class MoveAnalyzer
             Cache[i].Clear();
             MinimaxCache[i].Clear();
         }
+        RationalCache.Clear();
     }
     
     /// <summary>

@@ -139,10 +139,47 @@ public class BotPlayer
     /// </summary>
     private Piece SelectPieceLateGame(GameState gameState, List<Piece> availablePieces)
     {
+        // For levels 4 and 5, filter out pieces that allow opponent to win immediately
+        List<Piece> piecesToAnalyze = availablePieces;
+        
+        if (_level == BotLevel.Level4 || _level == BotLevel.Level5)
+        {
+            var emptyCells = gameState.Board.GetEmptyCells().ToList();
+            
+            // Find pieces that DON'T allow opponent to win immediately
+            var safePieces = new List<Piece>();
+            
+            foreach (var piece in availablePieces)
+            {
+                bool allowsWin = false;
+                
+                // Check if giving this piece allows opponent to win on any empty cell
+                foreach (var cell in emptyCells)
+                {
+                    var testState = gameState.Clone();
+                    testState.GivePiece(piece);
+                    testState.PlacePiece(cell.Row, cell.Col);
+                    
+                    if (testState.IsGameOver && testState.Winner != 0)
+                    {
+                        allowsWin = true;
+                        break;
+                    }
+                }
+                
+                if (!allowsWin)
+                    safePieces.Add(piece);
+            }
+            
+            // If we have safe pieces, only analyze those; otherwise analyze all
+            if (safePieces.Count > 0)
+                piecesToAnalyze = safePieces;
+        }
+        
         // Analyze each piece to get win/loss/draw counts
         var pieceAnalysis = new List<(Piece piece, GameOutcomes outcomes)>();
         
-        foreach (var piece in availablePieces)
+        foreach (var piece in piecesToAnalyze)
         {
             var outcomes = MoveAnalyzer.AnalyzePieceSelection(gameState, piece);
             pieceAnalysis.Add((piece, outcomes));

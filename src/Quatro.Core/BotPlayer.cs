@@ -73,13 +73,12 @@ public class BotPlayer
     }
 
     /// <summary>
-    /// Early game piece selection: random, but avoid giving winning pieces.
+    /// Filters pieces to find those that DON'T allow opponent to win immediately.
+    /// Returns the safe pieces if any exist, otherwise returns all pieces.
     /// </summary>
-    private Piece SelectPieceEarlyGame(GameState gameState, List<Piece> availablePieces)
+    private List<Piece> FilterSafePieces(GameState gameState, List<Piece> availablePieces)
     {
         var emptyCells = gameState.Board.GetEmptyCells().ToList();
-        
-        // Find pieces that DON'T allow opponent to win immediately
         var safePieces = new List<Piece>();
         
         foreach (var piece in availablePieces)
@@ -104,12 +103,17 @@ public class BotPlayer
                 safePieces.Add(piece);
         }
         
-        // If we have safe pieces, pick one randomly
-        if (safePieces.Count > 0)
-            return safePieces[_random.Next(safePieces.Count)];
-        
-        // Otherwise, we must give an unsafe piece (opponent will win)
-        return availablePieces[_random.Next(availablePieces.Count)];
+        // If we have safe pieces, return those; otherwise return all pieces
+        return safePieces.Count > 0 ? safePieces : availablePieces;
+    }
+
+    /// <summary>
+    /// Early game piece selection: random, but avoid giving winning pieces.
+    /// </summary>
+    private Piece SelectPieceEarlyGame(GameState gameState, List<Piece> availablePieces)
+    {
+        var piecesToChooseFrom = FilterSafePieces(gameState, availablePieces);
+        return piecesToChooseFrom[_random.Next(piecesToChooseFrom.Count)];
     }
 
     /// <summary>
@@ -144,36 +148,7 @@ public class BotPlayer
         
         if (_level == BotLevel.Level4 || _level == BotLevel.Level5)
         {
-            var emptyCells = gameState.Board.GetEmptyCells().ToList();
-            
-            // Find pieces that DON'T allow opponent to win immediately
-            var safePieces = new List<Piece>();
-            
-            foreach (var piece in availablePieces)
-            {
-                bool allowsWin = false;
-                
-                // Check if giving this piece allows opponent to win on any empty cell
-                foreach (var cell in emptyCells)
-                {
-                    var testState = gameState.Clone();
-                    testState.GivePiece(piece);
-                    testState.PlacePiece(cell.Row, cell.Col);
-                    
-                    if (testState.IsGameOver && testState.Winner != 0)
-                    {
-                        allowsWin = true;
-                        break;
-                    }
-                }
-                
-                if (!allowsWin)
-                    safePieces.Add(piece);
-            }
-            
-            // If we have safe pieces, only analyze those; otherwise analyze all
-            if (safePieces.Count > 0)
-                piecesToAnalyze = safePieces;
+            piecesToAnalyze = FilterSafePieces(gameState, availablePieces);
         }
         
         // Analyze each piece to get win/loss/draw counts

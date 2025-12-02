@@ -62,11 +62,14 @@ public class GameStateTests
         var state = new GameState();
         var piece = new Piece(5);
         state.GivePiece(piece);
+        // After GivePiece, turn switched to P2
+        Assert.False(state.IsPlayer1Turn);
 
         Assert.True(state.PlacePiece(0, 0));
         Assert.Equal(5, state.Board[0, 0]);
         Assert.Null(state.PieceToPlay);
-        Assert.False(state.IsPlayer1Turn); // Turn switched to player 2
+        // After P2 places, turn switches back to P1
+        Assert.True(state.IsPlayer1Turn);
     }
 
     [Fact]

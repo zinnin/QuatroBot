@@ -92,6 +92,8 @@ public class GameState
 
         PieceToPlay = piece;
         AvailablePieces &= (ushort)~(1 << piece.Value);
+        // Switch turn to opponent who will place the piece
+        IsPlayer1Turn = !IsPlayer1Turn;
         return true;
     }
 

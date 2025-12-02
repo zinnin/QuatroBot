@@ -1226,18 +1226,18 @@ public static class MoveAnalyzer
                         var testState = gameState.Clone();
                         testState.GivePiece(piece);
                         
-                        // After GivePiece, turn doesn't switch - same player will place
-                        // So result is from current player's perspective, not opponent's
-                        var resultAfterGiving = EvaluateMinimaxFromGameState(testState, cancellationToken);
+                        // After GivePiece, turn switches to opponent who will place
+                        // So result is from opponent's perspective
+                        var opponentResult = EvaluateMinimaxFromGameState(testState, cancellationToken);
                         
-                        if (resultAfterGiving == MinimaxResult.Win)
+                        if (opponentResult == MinimaxResult.Lose)
                         {
                             Interlocked.Exchange(ref bestResult, 1);
                             loopState.Stop();
                             return;
                         }
                         
-                        if (resultAfterGiving == MinimaxResult.Draw)
+                        if (opponentResult == MinimaxResult.Draw)
                             Interlocked.Exchange(ref foundDraw, 1);
                     });
                 }
@@ -1263,15 +1263,15 @@ public static class MoveAnalyzer
                     var testState = gameState.Clone();
                     testState.GivePiece(piece);
                     
-                    // After GivePiece, turn doesn't switch - same player will place
-                    // So result is from current player's perspective, not opponent's
-                    var resultAfterGiving = EvaluateMinimaxFromGameState(testState, cancellationToken);
+                    // After GivePiece, turn switches to opponent who will place
+                    // So result is from opponent's perspective
+                    var opponentResult = EvaluateMinimaxFromGameState(testState, cancellationToken);
                     
-                    if (resultAfterGiving == MinimaxResult.Unknown)
+                    if (opponentResult == MinimaxResult.Unknown)
                         return MinimaxResult.Unknown;
-                    if (resultAfterGiving == MinimaxResult.Win)
+                    if (opponentResult == MinimaxResult.Lose)
                         return MinimaxResult.Win;
-                    if (resultAfterGiving == MinimaxResult.Draw)
+                    if (opponentResult == MinimaxResult.Draw)
                         hasDraw = true;
                 }
                 
@@ -1312,10 +1312,17 @@ public static class MoveAnalyzer
         var outcomes = outcomesTask.Result;
         var minimax = minimaxTask.Result;
         
-        // After GivePiece, the turn doesn't switch - the same player places the piece.
-        // So the minimax result is already from the current player's perspective.
-        // No inversion needed.
-        return new AnalysisResult(outcomes, minimax);
+        // After GivePiece, the turn switches to opponent who places the piece.
+        // So the minimax result is from the opponent's perspective.
+        // We need to invert it for the current player.
+        var currentPlayerMinimax = minimax switch
+        {
+            MinimaxResult.Win => MinimaxResult.Lose,
+            MinimaxResult.Lose => MinimaxResult.Win,
+            _ => minimax
+        };
+        
+        return new AnalysisResult(outcomes, currentPlayerMinimax);
     }
     
     /// <summary>

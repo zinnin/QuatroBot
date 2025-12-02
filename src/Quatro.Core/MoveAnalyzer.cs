@@ -1369,15 +1369,9 @@ public static class MoveAnalyzer
         var outcomes = outcomesTask.Result;
         var minimax = minimaxTask.Result;
         
-        // The minimax result is from the opponent's perspective (they select a piece next)
-        // So we need to invert it for the current player
-        var currentPlayerMinimax = minimax switch
-        {
-            MinimaxResult.Win => MinimaxResult.Lose,
-            MinimaxResult.Lose => MinimaxResult.Win,
-            _ => minimax
-        };
-        
-        return new AnalysisResult(outcomes, currentPlayerMinimax);
+        // After PlacePiece, turn doesn't switch - same player will select next piece
+        // So the minimax result is already from the current player's perspective
+        // No inversion needed
+        return new AnalysisResult(outcomes, minimax);
     }
 }

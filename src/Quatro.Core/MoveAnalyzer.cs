@@ -239,7 +239,7 @@ public static class MoveAnalyzer
 
     /// <summary>
     /// Analyzes all possible game outcomes from a given board state and turn.
-    /// Uses parallel processing at early turns for better CPU utilization.
+    /// Uses parallel processing when there are enough branches to justify overhead.
     /// </summary>
     public static GameOutcomes AnalyzeGame(long board, int turn, CancellationToken cancellationToken = default)
     {
@@ -259,16 +259,17 @@ public static class MoveAnalyzer
         int branchCount = 16 - turn;
         
         // Use parallel processing when we have enough branches to justify overhead
-        // Parallelize at early turns (0-4) where there's significant work per branch
-        // At turn 4, branchCount is 12, still good for parallelization
-        if (turn < 5 && branchCount >= 8)
+        // Parallelize when there are 6+ branches available, regardless of turn number
+        // This ensures parallelization works even when starting mid-game
+        if (branchCount >= 6)
         {
             long p1Wins = 0, p2Wins = 0, draws = 0;
             
-            // Use 2x processor count for better throughput on CPU-bound work
+            // Use 4x processor count for better throughput on CPU-bound work
+            // This allows for more work items to be queued and processed
             var parallelOptions = new ParallelOptions
             {
-                MaxDegreeOfParallelism = Environment.ProcessorCount * 2
+                MaxDegreeOfParallelism = Environment.ProcessorCount * 4
             };
 
             try
@@ -322,7 +323,7 @@ public static class MoveAnalyzer
         }
         else
         {
-            // Sequential processing for deeper turns (already enough parallelism from above)
+            // Sequential processing for deeper turns with fewer branches
             var outcomes = new GameOutcomes(0, 0, 0);
 
             for (int n = turn; n < 16; n++)
@@ -431,10 +432,10 @@ public static class MoveAnalyzer
 
         long p1Wins = 0, p2Wins = 0, draws = 0;
         
-        // Use 2x processor count for better throughput on CPU-bound work
+        // Use 4x processor count for better throughput on CPU-bound work
         var parallelOptions = new ParallelOptions
         {
-            MaxDegreeOfParallelism = Environment.ProcessorCount * 2
+            MaxDegreeOfParallelism = Environment.ProcessorCount * 4
         };
 
         try

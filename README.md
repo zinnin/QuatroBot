@@ -19,6 +19,7 @@ The goal is to place four pieces in a row (horizontally, vertically, or diagonal
   - `Board` - 4x4 game board
   - `GameState` - Complete game state with efficient serialization (20 bytes)
   - `WinChecker` - Win detection logic
+  - `DrawCounter` - Counts possible draw games using transposition tables and symmetry reduction
 
 - **Quatro.Wpf** - WPF application for playing the game
 
@@ -32,6 +33,22 @@ The game state is designed for efficient serialization to support running many s
 - Piece to play: 1 byte
 - Flags: 1 byte
 - **Total: 20 bytes**
+
+## Draw Counter
+
+The `DrawCounter` class provides an efficient algorithm to count the number of possible draw games:
+
+```csharp
+// Count all possible draw games from the starting position
+long drawCount = DrawCounter.CountDraws();
+Console.WriteLine($"Number of possible draws: {drawCount}");
+```
+
+The algorithm uses:
+- Compact 64-bit board representation (4 bits per piece)
+- Transposition tables for symmetry reduction
+- Memoization cache for efficiency
+- Optimized move ordering to maximize early pruning
 
 ## Requirements
 
@@ -49,4 +66,5 @@ dotnet build
 ```bash
 dotnet test
 ```
+
 

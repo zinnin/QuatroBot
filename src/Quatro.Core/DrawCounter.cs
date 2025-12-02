@@ -1,0 +1,393 @@
+namespace Quatro.Core;
+
+/// <summary>
+/// Counts the number of possible draw games in Quatro.
+/// Uses transposition tables and symmetry reduction for efficiency.
+/// Ported from Java implementation.
+/// </summary>
+public static class DrawCounter
+{
+    /// <summary>
+    /// Order of squares being filled, chosen to maximize the chance of an early win.
+    /// </summary>
+    private static readonly int[] IndexShuffle = { 0, 5, 10, 15, 14, 13, 12, 9, 1, 6, 3, 2, 7, 11, 4, 8 };
+
+    /// <summary>
+    /// Highest depth for using the lookup cache.
+    /// </summary>
+    private const int MaxLookupIndex = 10;
+
+    /// <summary>
+    /// Cache for memoization at each turn depth.
+    /// </summary>
+    private static readonly Dictionary<long, long>[] Cache;
+
+    /// <summary>
+    /// Winning line masks for efficient evaluation.
+    /// Each mask covers 4 positions (4 bits each = 16 bits total per line).
+    /// </summary>
+    private static readonly long[] Masks;
+
+    /// <summary>
+    /// Transposition table mapping piece values to their canonical forms under symmetry.
+    /// </summary>
+    private static readonly int[][] Transpositions;
+
+    /// <summary>
+    /// Minimum transposition values for canonical signature computation.
+    /// </summary>
+    private static readonly int[] MinTranspositionValues;
+
+    /// <summary>
+    /// Lists of transpositions that achieve the minimum for each piece.
+    /// </summary>
+    private static readonly List<int>[] MinTranspositions;
+
+    static DrawCounter()
+    {
+        // Initialize cache
+        Cache = new Dictionary<long, long>[MaxLookupIndex];
+        for (int i = 0; i < MaxLookupIndex; i++)
+        {
+            Cache[i] = new Dictionary<long, long>();
+        }
+
+        // Initialize masks for winning lines
+        // Masks represent positions for each of the 10 winning lines
+        Masks = new long[10];
+        int[][] winLines =
+        [
+            [0, 1, 2, 3],     // Row 0
+            [4, 5, 6, 7],     // Row 1
+            [8, 9, 10, 11],   // Row 2
+            [12, 13, 14, 15], // Row 3
+            [0, 4, 8, 12],    // Column 0
+            [1, 5, 9, 13],    // Column 1
+            [2, 6, 10, 14],   // Column 2
+            [3, 7, 11, 15],   // Column 3
+            [0, 5, 10, 15],   // Main diagonal
+            [3, 6, 9, 12]     // Anti-diagonal
+        ];
+
+        for (int i = 0; i < 10; i++)
+        {
+            long mask = 0;
+            foreach (int pos in winLines[i])
+            {
+                mask |= 0xFL << (pos << 2);
+            }
+            Masks[i] = mask;
+        }
+
+        // Initialize transposition tables
+        // Generate all 48 transpositions for piece values
+        // These represent the symmetries of the piece characteristics
+        var transpositionsList = new List<int[]>();
+        
+        // Generate permutations of the 4 bits (characteristics)
+        // There are 4! = 24 permutations
+        int[][] bitPermutations = GenerateBitPermutations();
+        
+        // For each permutation, we can also invert each bit (XOR with 1)
+        // But to keep it manageable, we use identity and inverted versions
+        foreach (var perm in bitPermutations)
+        {
+            // Identity (no inversion)
+            transpositionsList.Add(GenerateTransposition(perm, [false, false, false, false]));
+            // Invert all bits
+            transpositionsList.Add(GenerateTransposition(perm, [true, true, true, true]));
+        }
+
+        Transpositions = new int[16][];
+        for (int piece = 0; piece < 16; piece++)
+        {
+            Transpositions[piece] = new int[transpositionsList.Count];
+            for (int t = 0; t < transpositionsList.Count; t++)
+            {
+                Transpositions[piece][t] = transpositionsList[t][piece];
+            }
+        }
+
+        // Compute min transposition values and lists
+        MinTranspositionValues = new int[16];
+        MinTranspositions = new List<int>[16];
+
+        for (int piece = 0; piece < 16; piece++)
+        {
+            int minVal = 16;
+            var minList = new List<int>();
+
+            for (int t = 0; t < transpositionsList.Count; t++)
+            {
+                int val = Transpositions[piece][t];
+                if (val < minVal)
+                {
+                    minVal = val;
+                    minList.Clear();
+                    minList.Add(t);
+                }
+                else if (val == minVal)
+                {
+                    minList.Add(t);
+                }
+            }
+
+            MinTranspositionValues[piece] = minVal;
+            MinTranspositions[piece] = minList;
+        }
+    }
+
+    private static int[][] GenerateBitPermutations()
+    {
+        // Generate all 24 permutations of 4 elements (bit positions)
+        var result = new List<int[]>();
+        int[] arr = { 0, 1, 2, 3 };
+        GeneratePermutations(arr, 0, result);
+        return result.ToArray();
+    }
+
+    private static void GeneratePermutations(int[] arr, int start, List<int[]> result)
+    {
+        if (start == arr.Length)
+        {
+            result.Add((int[])arr.Clone());
+            return;
+        }
+
+        for (int i = start; i < arr.Length; i++)
+        {
+            (arr[start], arr[i]) = (arr[i], arr[start]);
+            GeneratePermutations(arr, start + 1, result);
+            (arr[start], arr[i]) = (arr[i], arr[start]);
+        }
+    }
+
+    private static int[] GenerateTransposition(int[] bitPerm, bool[] invert)
+    {
+        var result = new int[16];
+        for (int piece = 0; piece < 16; piece++)
+        {
+            int newPiece = 0;
+            for (int b = 0; b < 4; b++)
+            {
+                int bit = (piece >> bitPerm[b]) & 1;
+                if (invert[b]) bit ^= 1;
+                newPiece |= bit << b;
+            }
+            result[piece] = newPiece;
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// Gets the starting board state with pieces 0-15 in positions 0-15.
+    /// </summary>
+    public static long GetStartBoard()
+    {
+        long board = 0;
+        for (int i = 0; i < 16; i++)
+        {
+            board |= (long)i << (i << 2);
+        }
+        return board;
+    }
+
+    /// <summary>
+    /// Counts the number of possible draw games from the starting position.
+    /// </summary>
+    public static long CountDraws()
+    {
+        // Clear cache for fresh computation
+        for (int i = 0; i < MaxLookupIndex; i++)
+        {
+            Cache[i].Clear();
+        }
+        return CountDraws(GetStartBoard(), 0);
+    }
+
+    /// <summary>
+    /// Counts the number of possible draw games from a given board state and turn.
+    /// </summary>
+    public static long CountDraws(long board, int turn)
+    {
+        long signature = 0;
+        if (turn < MaxLookupIndex)
+        {
+            signature = GetSignature(board, turn);
+            if (Cache[turn].TryGetValue(signature, out long cached))
+                return cached;
+        }
+
+        int indexShuffled = IndexShuffle[turn];
+        long count = 0;
+
+        for (int n = turn; n < 16; n++)
+        {
+            long newBoard = Swap(board, indexShuffled, IndexShuffle[n]);
+            if (PartialEvaluate(newBoard, indexShuffled))
+                continue;
+            if (turn == 15)
+                count++;
+            else
+                count += CountDraws(newBoard, turn + 1);
+        }
+
+        if (turn < MaxLookupIndex)
+            Cache[turn][signature] = count;
+
+        return count;
+    }
+
+    /// <summary>
+    /// Gets the canonical signature for a board state at a given turn.
+    /// </summary>
+    private static long GetSignature(long board, int turn)
+    {
+        int firstPiece = GetPiece(board, IndexShuffle[0]);
+        long signature = MinTranspositionValues[firstPiece];
+        var ts = new List<int>(MinTranspositions[firstPiece]);
+
+        for (int n = 1; n < turn; n++)
+        {
+            int min = 16;
+            var ts2 = new List<int>();
+
+            foreach (int t in ts)
+            {
+                int piece = GetPiece(board, IndexShuffle[n]);
+                int posId = Transpositions[piece][t];
+
+                if (posId == min)
+                {
+                    ts2.Add(t);
+                }
+                else if (posId < min)
+                {
+                    min = posId;
+                    ts2.Clear();
+                    ts2.Add(t);
+                }
+            }
+
+            ts = ts2;
+            signature = (signature << 4) | (uint)min;
+        }
+
+        return signature;
+    }
+
+    /// <summary>
+    /// Gets the piece value at a given position on the board.
+    /// </summary>
+    private static int GetPiece(long board, int position)
+    {
+        return (int)((board >> (position << 2)) & 0xF);
+    }
+
+    /// <summary>
+    /// Swaps two positions on the board.
+    /// </summary>
+    private static long Swap(long board, int pos1, int pos2)
+    {
+        if (pos1 == pos2) return board;
+
+        int piece1 = GetPiece(board, pos1);
+        int piece2 = GetPiece(board, pos2);
+
+        // Clear both positions
+        long mask1 = 0xFL << (pos1 << 2);
+        long mask2 = 0xFL << (pos2 << 2);
+        board &= ~(mask1 | mask2);
+
+        // Set swapped values
+        board |= (long)piece1 << (pos2 << 2);
+        board |= (long)piece2 << (pos1 << 2);
+
+        return board;
+    }
+
+    /// <summary>
+    /// Partially evaluates the board for wins based on the turn.
+    /// Only checks relevant winning lines for the given position.
+    /// 
+    /// The turn values correspond to positions in IndexShuffle:
+    /// - Turn 15 (position 8): completes main diagonal (mask 8)
+    /// - Turn 12 (position 12): completes row 3 (mask 3)
+    /// - Turn 1 (position 5): can complete column 1 (mask 5)
+    /// - Turn 3 (position 15): completes anti-diagonal (mask 9)
+    /// - Turn 2 (position 10): can complete row 0 (mask 0) or column 2 (mask 6)
+    /// - Turn 11 (position 7): completes column 3 (mask 7)
+    /// - Turn 4 (position 14): completes row 1 (mask 1)  
+    /// - Turn 8 (position 1): can complete column 0 (mask 4) or row 2 (mask 2)
+    /// </summary>
+    private static bool PartialEvaluate(long board, int turn)
+    {
+        return turn switch
+        {
+            15 => Evaluate(board, Masks[8]),  // Main diagonal
+            12 => Evaluate(board, Masks[3]),  // Row 3
+            1 => Evaluate(board, Masks[5]),   // Column 1
+            3 => Evaluate(board, Masks[9]),   // Anti-diagonal
+            2 => Evaluate(board, Masks[0]) || Evaluate(board, Masks[6]),  // Row 0 or Column 2
+            11 => Evaluate(board, Masks[7]),  // Column 3
+            4 => Evaluate(board, Masks[1]),   // Row 1
+            8 => Evaluate(board, Masks[4]) || Evaluate(board, Masks[2]),  // Column 0 or Row 2
+            _ => false
+        };
+    }
+
+    /// <summary>
+    /// Evaluates whether a winning line (specified by mask) has a win.
+    /// A win occurs when all 4 pieces share at least one characteristic.
+    /// </summary>
+    private static bool Evaluate(long board, long mask)
+    {
+        long relevantBits = board & mask;
+
+        // Extract the 4 pieces from the masked positions
+        // The mask has 4 groups of 4 bits set
+        int[] pieces = new int[4];
+        int idx = 0;
+
+        for (int pos = 0; pos < 16 && idx < 4; pos++)
+        {
+            if (((mask >> (pos << 2)) & 0xF) != 0)
+            {
+                pieces[idx++] = (int)((relevantBits >> (pos << 2)) & 0xF);
+            }
+        }
+
+        // Check if all 4 pieces share any characteristic
+        // They share a characteristic if AND or NAND of all pieces for that bit is all 0s or all 1s
+        for (int bit = 0; bit < 4; bit++)
+        {
+            int bitMask = 1 << bit;
+            int first = pieces[0] & bitMask;
+            bool allSame = true;
+
+            for (int i = 1; i < 4; i++)
+            {
+                if ((pieces[i] & bitMask) != first)
+                {
+                    allSame = false;
+                    break;
+                }
+            }
+
+            if (allSame) return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Clears the memoization cache.
+    /// </summary>
+    public static void ClearCache()
+    {
+        for (int i = 0; i < MaxLookupIndex; i++)
+        {
+            Cache[i].Clear();
+        }
+    }
+}

@@ -83,4 +83,145 @@ public class MoveAnalyzerTests
         var outcomes = MoveAnalyzer.AnalyzePlacement(state, 0, 0);
         Assert.Equal(0, outcomes.TotalGames);
     }
+    
+    [Fact]
+    public void AnalyzeFromGameStateRational_WithWinningMove_ReturnsWin()
+    {
+        // Set up a game state where the current player can win by placing a piece
+        var state = new GameState();
+        
+        // Place 3 pieces that share a characteristic in a row
+        // With corrected turn logic: P1 gives→P2 places & selects→P1 places & selects
+        state.GivePiece(new Piece(0));  // 0000 - P1 gives to P2
+        state.PlacePiece(0, 0);          // P2 places
+        state.GivePiece(new Piece(2));  // 0010 - P2 gives to P1
+        state.PlacePiece(0, 1);          // P1 places
+        state.GivePiece(new Piece(4));  // 0100 - P1 gives to P2
+        state.PlacePiece(0, 2);          // P2 places
+        
+        // Now P2 gives piece 6 (0110) which can complete the row
+        state.GivePiece(new Piece(6));
+        
+        // Now it's P1's turn to place (P2 gave piece 6 to P1).
+        // P1 will win by placing at (0, 3) to complete the row of "short" pieces
+        MoveAnalyzer.ClearCache();
+        var outcomes = MoveAnalyzer.AnalyzeFromGameStateRational(state);
+        
+        // With rational play, P1 will take the win
+        Assert.Equal(1, outcomes.Player1Wins);
+        Assert.Equal(0, outcomes.Player2Wins);
+        Assert.Equal(0, outcomes.Draws);
+    }
+    
+    [Fact]
+    public void AnalyzeFromGameStateRational_AvoidGivingWinningPiece()
+    {
+        // Set up a game state where giving certain pieces would allow opponent to win
+        var state = new GameState();
+        
+        // Place pieces in a pattern that leaves (0,3) empty with 3 short pieces in row 0
+        // With corrected turn logic: P1 gives to P2, P2 places, back to P1
+        state.GivePiece(new Piece(0));  // 0000 - short - P1 gives to P2
+        state.PlacePiece(0, 0);          // P2 places, turn back to P1
+        state.GivePiece(new Piece(2));  // 0010 - short - P1 gives to P2
+        state.PlacePiece(0, 1);          // P2 places, turn back to P1
+        state.GivePiece(new Piece(4));  // 0100 - short - P1 gives to P2
+        state.PlacePiece(0, 2);          // P2 places, turn back to P1
+        
+        // Also place more pieces to reduce the search space
+        state.GivePiece(new Piece(15));  // 1111 - tall - P1 gives to P2
+        state.PlacePiece(1, 0);          // P2 places, turn back to P1
+        state.GivePiece(new Piece(13));  // 1101 - tall - P1 gives to P2
+        state.PlacePiece(1, 1);          // P2 places, turn back to P1
+        state.GivePiece(new Piece(11));  // 1011 - tall - P1 gives to P2
+        state.PlacePiece(1, 2);          // P2 places, turn back to P1
+        state.GivePiece(new Piece(9));   // 1001 - tall - P1 gives to P2
+        state.PlacePiece(1, 3);          // P2 places, turn back to P1
+        state.GivePiece(new Piece(7));   // 0111 - tall - P1 gives to P2
+        state.PlacePiece(2, 0);          // P2 places, turn back to P1
+        state.GivePiece(new Piece(5));   // 0101 - tall - P1 gives to P2
+        state.PlacePiece(2, 1);          // P2 places, turn back to P1
+        state.GivePiece(new Piece(3));   // 0011 - tall - P1 gives to P2
+        state.PlacePiece(2, 2);          // P2 places, turn back to P1
+        state.GivePiece(new Piece(1));   // 0001 - tall - P1 gives to P2
+        state.PlacePiece(2, 3);          // P2 places, turn back to P1
+        
+        // Now P1 needs to give a piece to P2
+        // Remaining pieces: 6, 8, 10, 12, 14 - all have bit 0 = 0 (short)
+        // Any short piece placed at (0,3) would complete the row of short pieces
+        // P1 must give one of these to P2, and P2 will place at (0,3) and win
+        
+        MoveAnalyzer.ClearCache();
+        var outcomes = MoveAnalyzer.AnalyzeFromGameStateRational(state);
+        
+        // Since all remaining pieces allow P2 (the opponent/placer) to win, P2 should always win
+        Assert.Equal(0, outcomes.Player1Wins);
+        Assert.True(outcomes.Player2Wins > 0);
+        Assert.Equal(0, outcomes.Draws);
+    }
+    
+    [Fact]
+    public void AnalyzeFromGameStateRational_CachingWorks()
+    {
+        // Set up a simple game state
+        var state = new GameState();
+        state.GivePiece(new Piece(0));
+        state.PlacePiece(0, 0);
+        state.GivePiece(new Piece(15));
+        state.PlacePiece(1, 1);
+        state.GivePiece(new Piece(5));
+        state.PlacePiece(2, 2);
+        state.GivePiece(new Piece(10));
+        state.PlacePiece(3, 3);
+        state.GivePiece(new Piece(3));
+        state.PlacePiece(0, 3);
+        state.GivePiece(new Piece(12));
+        state.PlacePiece(3, 0);
+        state.GivePiece(new Piece(6));
+        state.PlacePiece(1, 2);
+        state.GivePiece(new Piece(9));
+        state.PlacePiece(2, 1);
+        state.GivePiece(new Piece(1));
+        state.PlacePiece(0, 1);
+        state.GivePiece(new Piece(14));
+        state.PlacePiece(1, 0);
+        
+        MoveAnalyzer.ClearCache();
+        
+        // First call
+        var outcomes1 = MoveAnalyzer.AnalyzeFromGameStateRational(state);
+        
+        // Second call should use cache
+        var outcomes2 = MoveAnalyzer.AnalyzeFromGameStateRational(state);
+        
+        // Results should be identical
+        Assert.Equal(outcomes1.Player1Wins, outcomes2.Player1Wins);
+        Assert.Equal(outcomes1.Player2Wins, outcomes2.Player2Wins);
+        Assert.Equal(outcomes1.Draws, outcomes2.Draws);
+    }
+    
+    [Fact]
+    public void AnalyzeFromGameStateRational_GameOverState_ReturnsCorrectOutcome()
+    {
+        // Set up a game that's already won
+        var state = new GameState();
+        
+        // Create a winning row of "short" pieces
+        // With corrected turn logic: give→opponent places & selects
+        state.GivePiece(new Piece(0));  // 0000 - short - P1 gives to P2
+        state.PlacePiece(0, 0);          // P2 places
+        state.GivePiece(new Piece(2));  // 0010 - short - P2 gives to P1
+        state.PlacePiece(0, 1);          // P1 places
+        state.GivePiece(new Piece(4));  // 0100 - short - P1 gives to P2
+        state.PlacePiece(0, 2);          // P2 places
+        state.GivePiece(new Piece(6));  // 0110 - short - P2 gives to P1
+        state.PlacePiece(0, 3);          // P1 places - this wins for P1
+        
+        MoveAnalyzer.ClearCache();
+        var outcomes = MoveAnalyzer.AnalyzeFromGameStateRational(state);
+        
+        Assert.Equal(1, outcomes.Player1Wins);
+        Assert.Equal(0, outcomes.Player2Wins);
+        Assert.Equal(0, outcomes.Draws);
+    }
 }

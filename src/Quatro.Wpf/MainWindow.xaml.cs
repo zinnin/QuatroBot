@@ -117,7 +117,7 @@ public partial class MainWindow : Window
         if (_gameState.PieceToPlay.HasValue) return;
         if (_gameState.IsGameOver) return;
 
-        byte pieceValue = (byte)(int)button.Tag;
+        byte pieceValue = (byte)button.Tag;
         var piece = new Piece(pieceValue);
 
         if (_gameState.GivePiece(piece))

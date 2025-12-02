@@ -531,9 +531,13 @@ public partial class MainWindow : Window
                 UpdateUI();
             }
         }
+        catch (InvalidOperationException ex)
+        {
+            MessageBox.Show($"Bot made an invalid move: {ex.Message}", "Bot Error", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
         catch (Exception ex)
         {
-            MessageBox.Show($"Bot error: {ex.Message}", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+            MessageBox.Show($"Unexpected bot error: {ex.Message}\n\nPlease restart the game.", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
         }
     }
 }

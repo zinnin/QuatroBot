@@ -240,18 +240,23 @@ public class BotPlayer
 
     // Level 1: Pick options with most losses
     // Interpretation: We want the opponent to have the most losses possible
+    // When analyzing piece selection, outcomes are absolute P1/P2 wins from game tree
+    // We want to give pieces that result in opponent having fewer wins
     private List<(Piece piece, long score)> ScorePiecesLevel1(List<(Piece piece, GameOutcomes outcomes)> analysis)
     {
-        // When giving a piece, the outcomes are from the opponent's perspective (who will place it)
-        // We want to maximize opponent losses
+        // The outcomes represent absolute P1/P2 wins after giving the piece
+        // We are currently player 1 or 2, and we want opponent to lose
+        // Since we're giving a piece, after our move it becomes opponent's turn
+        // We want to minimize opponent's wins from the analysis
         return analysis.Select(a => 
         {
-            // Total losses = opponent's opponent wins (which is our wins)
-            // Calculate total outcomes and opponent losses
-            long totalGames = a.outcomes.TotalGames;
-            long opponentWins = a.outcomes.Player1Wins + a.outcomes.Player2Wins;
-            long opponentLosses = totalGames - opponentWins - a.outcomes.Draws;
-            return (a.piece, score: opponentLosses);
+            // Both P1 and P2 wins include wins by both players
+            // To make opponent lose, we want to maximize OUR future wins
+            // But the outcomes are after opponent places, so it's complex
+            // Simplified: minimize total wins (more draws/losses overall)
+            long totalWins = a.outcomes.Player1Wins + a.outcomes.Player2Wins;
+            long losses = a.outcomes.TotalGames - totalWins - a.outcomes.Draws;
+            return (a.piece, score: losses);
         }).ToList();
     }
 
@@ -273,10 +278,9 @@ public class BotPlayer
     {
         return analysis.Select(a => 
         {
-            long totalGames = a.outcomes.TotalGames;
-            long opponentWins = a.outcomes.Player1Wins + a.outcomes.Player2Wins;
-            long opponentLosses = totalGames - opponentWins - a.outcomes.Draws;
-            long score = a.outcomes.Draws + opponentLosses;
+            long totalWins = a.outcomes.Player1Wins + a.outcomes.Player2Wins;
+            long losses = a.outcomes.TotalGames - totalWins - a.outcomes.Draws;
+            long score = a.outcomes.Draws + losses;
             return (a.piece, score);
         }).ToList();
     }
@@ -336,15 +340,14 @@ public class BotPlayer
     {
         return analysis.Select(a => 
         {
-            long totalGames = a.outcomes.TotalGames;
-            long opponentWins = a.outcomes.Player1Wins + a.outcomes.Player2Wins;
-            long opponentLosses = totalGames - opponentWins - a.outcomes.Draws;
+            long totalWins = a.outcomes.Player1Wins + a.outcomes.Player2Wins;
+            long losses = a.outcomes.TotalGames - totalWins - a.outcomes.Draws;
             
-            // Only consider if opponent wins > opponent losses
-            if (opponentWins > opponentLosses)
+            // Only consider if total wins > total losses
+            if (totalWins > losses)
             {
-                // Want to pick least wins (so minimize opponent wins)
-                return (a.piece, score: -opponentWins);
+                // Want to pick least wins
+                return (a.piece, score: -totalWins);
             }
             else
             {

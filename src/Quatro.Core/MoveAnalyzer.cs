@@ -413,6 +413,8 @@ public static class MoveAnalyzer
     /// <summary>
     /// Analyzes outcomes for selecting a specific piece at the current game state.
     /// This simulates what happens when the current player gives this piece to their opponent.
+    /// Uses rational play analysis - assumes players always take winning moves and avoid giving
+    /// pieces that allow the opponent to win immediately.
     /// </summary>
     public static GameOutcomes AnalyzePieceSelection(GameState gameState, Piece piece, CancellationToken cancellationToken = default)
     {
@@ -432,6 +434,8 @@ public static class MoveAnalyzer
 
     /// <summary>
     /// Analyzes outcomes for placing the current piece at a specific position.
+    /// Uses rational play analysis - assumes players always take winning moves and avoid giving
+    /// pieces that allow the opponent to win immediately.
     /// </summary>
     public static GameOutcomes AnalyzePlacement(GameState gameState, int row, int col, CancellationToken cancellationToken = default)
     {
@@ -1274,6 +1278,7 @@ public static class MoveAnalyzer
     
     /// <summary>
     /// Analyzes a piece selection with both outcome counting and minimax evaluation.
+    /// Uses rational play analysis - assumes players always take winning moves.
     /// </summary>
     public static AnalysisResult AnalyzePieceSelectionFull(GameState gameState, Piece piece, CancellationToken cancellationToken = default)
     {
@@ -1287,8 +1292,8 @@ public static class MoveAnalyzer
         var testState = gameState.Clone();
         testState.GivePiece(piece);
         
-        // Run both analyses in parallel
-        var outcomesTask = Task.Run(() => AnalyzeFromGameState(testState, cancellationToken), cancellationToken);
+        // Run both analyses in parallel using rational play
+        var outcomesTask = Task.Run(() => AnalyzeFromGameStateRational(testState, cancellationToken), cancellationToken);
         var minimaxTask = Task.Run(() => EvaluateMinimax(testState, cancellationToken), cancellationToken);
         
         try
@@ -1317,6 +1322,7 @@ public static class MoveAnalyzer
     
     /// <summary>
     /// Analyzes a placement with both outcome counting and minimax evaluation.
+    /// Uses rational play analysis - assumes players always take winning moves.
     /// </summary>
     public static AnalysisResult AnalyzePlacementFull(GameState gameState, int row, int col, CancellationToken cancellationToken = default)
     {
@@ -1342,8 +1348,8 @@ public static class MoveAnalyzer
             return new AnalysisResult(winOutcomes, MinimaxResult.Win);
         }
         
-        // Run both analyses in parallel
-        var outcomesTask = Task.Run(() => AnalyzeFromGameState(testState, cancellationToken), cancellationToken);
+        // Run both analyses in parallel using rational play
+        var outcomesTask = Task.Run(() => AnalyzeFromGameStateRational(testState, cancellationToken), cancellationToken);
         var minimaxTask = Task.Run(() => EvaluateMinimax(testState, cancellationToken), cancellationToken);
         
         try

@@ -99,11 +99,11 @@ public class MoveAnalyzerTests
         state.GivePiece(new Piece(4));  // 0100 - P1 gives
         state.PlacePiece(0, 2);          // P1 places, turn -> P2
         
-        // Now give piece 6 (0110) which can complete the row - P2 gives this to P1
+        // Now P2 gives piece 6 (0110) which can complete the row
         state.GivePiece(new Piece(6));
         
-        // Now it's P2's turn to place. P2 should win by placing at (0, 3) 
-        // to complete the row of "short" pieces
+        // Now it's P2's turn to place (P2 gave the piece, so P2 places it).
+        // P2 will win by placing at (0, 3) to complete the row of "short" pieces
         MoveAnalyzer.ClearCache();
         var outcomes = MoveAnalyzer.AnalyzeFromGameStateRational(state);
         

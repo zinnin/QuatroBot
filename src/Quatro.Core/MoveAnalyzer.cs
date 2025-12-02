@@ -291,28 +291,32 @@ public static class MoveAnalyzer
     /// Analyzes outcomes for selecting a specific piece at the current game state.
     /// This simulates what happens when the current player gives this piece to their opponent.
     /// </summary>
-    public static GameOutcomes AnalyzePieceSelection(GameState gameState, Piece piece)
+    public static GameOutcomes AnalyzePieceSelection(GameState gameState, Piece piece, CancellationToken cancellationToken = default)
     {
         if (!gameState.IsPieceAvailable(piece))
             return new GameOutcomes(0, 0, 0);
+        
+        cancellationToken.ThrowIfCancellationRequested();
         
         // Clone and give the piece
         var testState = gameState.Clone();
         testState.GivePiece(piece);
         
-        return AnalyzeFromGameState(testState);
+        return AnalyzeFromGameState(testState, cancellationToken);
     }
 
     /// <summary>
     /// Analyzes outcomes for placing the current piece at a specific position.
     /// </summary>
-    public static GameOutcomes AnalyzePlacement(GameState gameState, int row, int col)
+    public static GameOutcomes AnalyzePlacement(GameState gameState, int row, int col, CancellationToken cancellationToken = default)
     {
         if (!gameState.PieceToPlay.HasValue)
             return new GameOutcomes(0, 0, 0);
         
         if (!gameState.Board.IsEmpty(row, col))
             return new GameOutcomes(0, 0, 0);
+        
+        cancellationToken.ThrowIfCancellationRequested();
         
         // Clone and place the piece
         var testState = gameState.Clone();
@@ -327,13 +331,13 @@ public static class MoveAnalyzer
                 return new GameOutcomes(0, 1, 0);
         }
         
-        return AnalyzeFromGameState(testState);
+        return AnalyzeFromGameState(testState, cancellationToken);
     }
 
     /// <summary>
     /// Analyzes game outcomes from a GameState object.
     /// </summary>
-    public static GameOutcomes AnalyzeFromGameState(GameState gameState)
+    public static GameOutcomes AnalyzeFromGameState(GameState gameState, CancellationToken cancellationToken = default)
     {
         if (gameState.IsGameOver)
         {
@@ -356,7 +360,8 @@ public static class MoveAnalyzer
             // Need to place the piece - try all empty positions
             foreach (var (row, col) in gameState.Board.GetEmptyCells())
             {
-                outcomes = outcomes + AnalyzePlacement(gameState, row, col);
+                cancellationToken.ThrowIfCancellationRequested();
+                outcomes = outcomes + AnalyzePlacement(gameState, row, col, cancellationToken);
             }
         }
         else
@@ -364,7 +369,8 @@ public static class MoveAnalyzer
             // Need to select a piece to give
             foreach (var piece in gameState.GetAvailablePieces())
             {
-                outcomes = outcomes + AnalyzePieceSelection(gameState, piece);
+                cancellationToken.ThrowIfCancellationRequested();
+                outcomes = outcomes + AnalyzePieceSelection(gameState, piece, cancellationToken);
             }
         }
         

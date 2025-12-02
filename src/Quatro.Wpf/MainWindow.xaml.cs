@@ -16,6 +16,7 @@ public partial class MainWindow : Window
     private readonly Button[] _boardButtons = new Button[16];
     private readonly Button[] _pieceButtons = new Button[16];
     private bool _analysisEnabled = false;
+    private CancellationTokenSource? _analysisCts;
 
     public MainWindow()
     {
@@ -101,11 +102,27 @@ public partial class MainWindow : Window
         return shape;
     }
 
+    private void CancelPendingAnalysis()
+    {
+        try
+        {
+            _analysisCts?.Cancel();
+        }
+        finally
+        {
+            _analysisCts?.Dispose();
+            _analysisCts = null;
+        }
+    }
+
     private void BoardCell_Click(object sender, RoutedEventArgs e)
     {
         if (sender is not Button button) return;
         if (!_gameState.PieceToPlay.HasValue) return;
         if (_gameState.IsGameOver) return;
+
+        // Cancel any pending analysis when making a move
+        CancelPendingAnalysis();
 
         int index = (int)button.Tag;
         int row = index / 4;
@@ -117,7 +134,7 @@ public partial class MainWindow : Window
         }
     }
 
-    private void BoardCell_MouseEnter(object sender, MouseEventArgs e)
+    private async void BoardCell_MouseEnter(object sender, MouseEventArgs e)
     {
         if (!_analysisEnabled) return;
         if (sender is not Button button) return;
@@ -130,16 +147,39 @@ public partial class MainWindow : Window
 
         if (!_gameState.Board.IsEmpty(row, col)) return;
 
+        // Cancel any previous analysis
+        CancelPendingAnalysis();
+        _analysisCts = new CancellationTokenSource();
+        var token = _analysisCts.Token;
+
         AnalysisText.Text = $"Analyzing placement at ({row}, {col})...";
+        ShowAnalysisLoading();
         
-        // Run analysis in background
-        var outcomes = MoveAnalyzer.AnalyzePlacement(_gameState, row, col);
-        UpdateAnalysisDisplay(outcomes, $"Place at ({row}, {col})");
+        // Capture state for background thread
+        var gameStateCopy = _gameState.Clone();
+        
+        try
+        {
+            // Run analysis on background thread
+            var outcomes = await Task.Run(() => 
+                MoveAnalyzer.AnalyzePlacement(gameStateCopy, row, col, token), token);
+            
+            // Update UI on main thread (only if not cancelled)
+            if (!token.IsCancellationRequested)
+            {
+                UpdateAnalysisDisplay(outcomes, $"Place at ({row}, {col})");
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Analysis was cancelled, ignore
+        }
     }
 
     private void BoardCell_MouseLeave(object sender, MouseEventArgs e)
     {
         if (!_analysisEnabled) return;
+        CancelPendingAnalysis();
         ClearAnalysisDisplay();
     }
 
@@ -148,6 +188,9 @@ public partial class MainWindow : Window
         if (sender is not Button button) return;
         if (_gameState.PieceToPlay.HasValue) return;
         if (_gameState.IsGameOver) return;
+
+        // Cancel any pending analysis when making a move
+        CancelPendingAnalysis();
 
         byte pieceValue = (byte)button.Tag;
         var piece = new Piece(pieceValue);
@@ -158,7 +201,7 @@ public partial class MainWindow : Window
         }
     }
 
-    private void PieceButton_MouseEnter(object sender, MouseEventArgs e)
+    private async void PieceButton_MouseEnter(object sender, MouseEventArgs e)
     {
         if (!_analysisEnabled) return;
         if (sender is not Button button) return;
@@ -170,16 +213,39 @@ public partial class MainWindow : Window
 
         if (!_gameState.IsPieceAvailable(piece)) return;
 
+        // Cancel any previous analysis
+        CancelPendingAnalysis();
+        _analysisCts = new CancellationTokenSource();
+        var token = _analysisCts.Token;
+
         AnalysisText.Text = $"Analyzing piece {piece}...";
+        ShowAnalysisLoading();
         
-        // Run analysis
-        var outcomes = MoveAnalyzer.AnalyzePieceSelection(_gameState, piece);
-        UpdateAnalysisDisplay(outcomes, $"Give piece {piece}");
+        // Capture state for background thread
+        var gameStateCopy = _gameState.Clone();
+        
+        try
+        {
+            // Run analysis on background thread
+            var outcomes = await Task.Run(() => 
+                MoveAnalyzer.AnalyzePieceSelection(gameStateCopy, piece, token), token);
+            
+            // Update UI on main thread (only if not cancelled)
+            if (!token.IsCancellationRequested)
+            {
+                UpdateAnalysisDisplay(outcomes, $"Give piece {piece}");
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Analysis was cancelled, ignore
+        }
     }
 
     private void PieceButton_MouseLeave(object sender, MouseEventArgs e)
     {
         if (!_analysisEnabled) return;
+        CancelPendingAnalysis();
         ClearAnalysisDisplay();
     }
 
@@ -195,10 +261,19 @@ public partial class MainWindow : Window
         }
         else
         {
+            CancelPendingAnalysis();
             AnalysisColumn.Width = new GridLength(0);
             AnalysisPanel.Visibility = Visibility.Collapsed;
             this.Width = 900;
         }
+    }
+
+    private void ShowAnalysisLoading()
+    {
+        Player1WinsText.Text = "P1 Wins: calculating...";
+        Player2WinsText.Text = "P2 Wins: calculating...";
+        DrawsText.Text = "Draws: calculating...";
+        TotalGamesText.Text = "Total: calculating...";
     }
 
     private void UpdateAnalysisDisplay(GameOutcomes outcomes, string description)
@@ -221,6 +296,7 @@ public partial class MainWindow : Window
 
     private void NewGameButton_Click(object sender, RoutedEventArgs e)
     {
+        CancelPendingAnalysis();
         _gameState = new GameState();
         UpdateUI();
         ClearAnalysisDisplay();

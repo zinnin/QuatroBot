@@ -1,3 +1,5 @@
+using System.Collections.Concurrent;
+
 namespace Quatro.Core;
 
 /// <summary>
@@ -43,9 +45,9 @@ public static class MoveAnalyzer
     private const int MaxLookupIndex = 10;
 
     /// <summary>
-    /// Cache for memoization at each turn depth.
+    /// Cache for memoization at each turn depth. Uses ConcurrentDictionary for thread safety.
     /// </summary>
-    private static readonly Dictionary<long, GameOutcomes>[] Cache;
+    private static readonly ConcurrentDictionary<long, GameOutcomes>[] Cache;
 
     /// <summary>
     /// Winning line masks for efficient evaluation.
@@ -70,11 +72,11 @@ public static class MoveAnalyzer
 
     static MoveAnalyzer()
     {
-        // Initialize cache
-        Cache = new Dictionary<long, GameOutcomes>[MaxLookupIndex];
+        // Initialize cache with thread-safe concurrent dictionaries
+        Cache = new ConcurrentDictionary<long, GameOutcomes>[MaxLookupIndex];
         for (int i = 0; i < MaxLookupIndex; i++)
         {
-            Cache[i] = new Dictionary<long, GameOutcomes>();
+            Cache[i] = new ConcurrentDictionary<long, GameOutcomes>();
         }
 
         // Initialize masks for winning lines
@@ -335,7 +337,7 @@ public static class MoveAnalyzer
     }
 
     /// <summary>
-    /// Analyzes game outcomes from a GameState object.
+    /// Analyzes game outcomes from a GameState object using parallel processing.
     /// </summary>
     public static GameOutcomes AnalyzeFromGameState(GameState gameState, CancellationToken cancellationToken = default)
     {
@@ -349,32 +351,45 @@ public static class MoveAnalyzer
                 return new GameOutcomes(0, 0, 1);
         }
 
-        // Convert GameState to compact board representation for analysis
-        // This is a simplified analysis - for full accuracy we'd need to 
-        // track which pieces are available and the current turn properly
-        
-        var outcomes = new GameOutcomes(0, 0, 0);
+        // Use parallel processing for better CPU utilization
+        var parallelOptions = new ParallelOptions
+        {
+            CancellationToken = cancellationToken,
+            MaxDegreeOfParallelism = Environment.ProcessorCount
+        };
+
+        long p1Wins = 0, p2Wins = 0, draws = 0;
         
         if (gameState.PieceToPlay.HasValue)
         {
-            // Need to place the piece - try all empty positions
-            foreach (var (row, col) in gameState.Board.GetEmptyCells())
+            // Need to place the piece - try all empty positions in parallel
+            var emptyCells = gameState.Board.GetEmptyCells().ToList();
+            
+            Parallel.ForEach(emptyCells, parallelOptions, (cell) =>
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                outcomes = outcomes + AnalyzePlacement(gameState, row, col, cancellationToken);
-            }
+                var result = AnalyzePlacement(gameState, cell.Row, cell.Col, cancellationToken);
+                Interlocked.Add(ref p1Wins, result.Player1Wins);
+                Interlocked.Add(ref p2Wins, result.Player2Wins);
+                Interlocked.Add(ref draws, result.Draws);
+            });
         }
         else
         {
-            // Need to select a piece to give
-            foreach (var piece in gameState.GetAvailablePieces())
+            // Need to select a piece to give - process in parallel
+            var availablePieces = gameState.GetAvailablePieces().ToList();
+            
+            Parallel.ForEach(availablePieces, parallelOptions, (piece) =>
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                outcomes = outcomes + AnalyzePieceSelection(gameState, piece, cancellationToken);
-            }
+                var result = AnalyzePieceSelection(gameState, piece, cancellationToken);
+                Interlocked.Add(ref p1Wins, result.Player1Wins);
+                Interlocked.Add(ref p2Wins, result.Player2Wins);
+                Interlocked.Add(ref draws, result.Draws);
+            });
         }
         
-        return outcomes;
+        return new GameOutcomes(p1Wins, p2Wins, draws);
     }
 
     /// <summary>

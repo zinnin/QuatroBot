@@ -1,5 +1,6 @@
 ﻿using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Shapes;
 using Quatro.Core;
@@ -14,6 +15,7 @@ public partial class MainWindow : Window
     private GameState _gameState = new();
     private readonly Button[] _boardButtons = new Button[16];
     private readonly Button[] _pieceButtons = new Button[16];
+    private bool _analysisEnabled = false;
 
     public MainWindow()
     {
@@ -36,6 +38,8 @@ public partial class MainWindow : Window
                 Tag = i
             };
             button.Click += BoardCell_Click;
+            button.MouseEnter += BoardCell_MouseEnter;
+            button.MouseLeave += BoardCell_MouseLeave;
             _boardButtons[i] = button;
             BoardGrid.Children.Add(button);
         }
@@ -56,6 +60,8 @@ public partial class MainWindow : Window
                 Tag = i
             };
             button.Click += PieceButton_Click;
+            button.MouseEnter += PieceButton_MouseEnter;
+            button.MouseLeave += PieceButton_MouseLeave;
             _pieceButtons[i] = button;
             PiecesGrid.Children.Add(button);
         }
@@ -111,6 +117,32 @@ public partial class MainWindow : Window
         }
     }
 
+    private void BoardCell_MouseEnter(object sender, MouseEventArgs e)
+    {
+        if (!_analysisEnabled) return;
+        if (sender is not Button button) return;
+        if (!_gameState.PieceToPlay.HasValue) return;
+        if (_gameState.IsGameOver) return;
+
+        int index = (int)button.Tag;
+        int row = index / 4;
+        int col = index % 4;
+
+        if (!_gameState.Board.IsEmpty(row, col)) return;
+
+        AnalysisText.Text = $"Analyzing placement at ({row}, {col})...";
+        
+        // Run analysis in background
+        var outcomes = MoveAnalyzer.AnalyzePlacement(_gameState, row, col);
+        UpdateAnalysisDisplay(outcomes, $"Place at ({row}, {col})");
+    }
+
+    private void BoardCell_MouseLeave(object sender, MouseEventArgs e)
+    {
+        if (!_analysisEnabled) return;
+        ClearAnalysisDisplay();
+    }
+
     private void PieceButton_Click(object sender, RoutedEventArgs e)
     {
         if (sender is not Button button) return;
@@ -126,10 +158,72 @@ public partial class MainWindow : Window
         }
     }
 
+    private void PieceButton_MouseEnter(object sender, MouseEventArgs e)
+    {
+        if (!_analysisEnabled) return;
+        if (sender is not Button button) return;
+        if (_gameState.PieceToPlay.HasValue) return;
+        if (_gameState.IsGameOver) return;
+
+        byte pieceValue = (byte)button.Tag;
+        var piece = new Piece(pieceValue);
+
+        if (!_gameState.IsPieceAvailable(piece)) return;
+
+        AnalysisText.Text = $"Analyzing piece {piece}...";
+        
+        // Run analysis
+        var outcomes = MoveAnalyzer.AnalyzePieceSelection(_gameState, piece);
+        UpdateAnalysisDisplay(outcomes, $"Give piece {piece}");
+    }
+
+    private void PieceButton_MouseLeave(object sender, MouseEventArgs e)
+    {
+        if (!_analysisEnabled) return;
+        ClearAnalysisDisplay();
+    }
+
+    private void ShowAnalysisMenuItem_Click(object sender, RoutedEventArgs e)
+    {
+        _analysisEnabled = ShowAnalysisMenuItem.IsChecked;
+        
+        if (_analysisEnabled)
+        {
+            AnalysisColumn.Width = new GridLength(250);
+            AnalysisPanel.Visibility = Visibility.Visible;
+            this.Width = 1100;
+        }
+        else
+        {
+            AnalysisColumn.Width = new GridLength(0);
+            AnalysisPanel.Visibility = Visibility.Collapsed;
+            this.Width = 900;
+        }
+    }
+
+    private void UpdateAnalysisDisplay(GameOutcomes outcomes, string description)
+    {
+        AnalysisText.Text = description;
+        Player1WinsText.Text = $"P1 Wins: {outcomes.Player1Wins:N0}";
+        Player2WinsText.Text = $"P2 Wins: {outcomes.Player2Wins:N0}";
+        DrawsText.Text = $"Draws: {outcomes.Draws:N0}";
+        TotalGamesText.Text = $"Total: {outcomes.TotalGames:N0}";
+    }
+
+    private void ClearAnalysisDisplay()
+    {
+        AnalysisText.Text = "Hover over pieces or board positions to see analysis.";
+        Player1WinsText.Text = "P1 Wins: -";
+        Player2WinsText.Text = "P2 Wins: -";
+        DrawsText.Text = "Draws: -";
+        TotalGamesText.Text = "Total: -";
+    }
+
     private void NewGameButton_Click(object sender, RoutedEventArgs e)
     {
         _gameState = new GameState();
         UpdateUI();
+        ClearAnalysisDisplay();
     }
 
     private void UpdateUI()

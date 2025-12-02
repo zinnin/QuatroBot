@@ -1,11 +1,36 @@
 namespace Quatro.Core;
 
 /// <summary>
-/// Counts the number of possible draw games in Quatro.
-/// Uses transposition tables and symmetry reduction for efficiency.
-/// Ported from Java implementation.
+/// Represents the outcome counts for game analysis.
 /// </summary>
-public static class DrawCounter
+public readonly struct GameOutcomes
+{
+    public long Player1Wins { get; init; }
+    public long Player2Wins { get; init; }
+    public long Draws { get; init; }
+    public long TotalGames => Player1Wins + Player2Wins + Draws;
+
+    public GameOutcomes(long p1Wins, long p2Wins, long draws)
+    {
+        Player1Wins = p1Wins;
+        Player2Wins = p2Wins;
+        Draws = draws;
+    }
+
+    public static GameOutcomes operator +(GameOutcomes a, GameOutcomes b)
+    {
+        return new GameOutcomes(
+            a.Player1Wins + b.Player1Wins,
+            a.Player2Wins + b.Player2Wins,
+            a.Draws + b.Draws);
+    }
+}
+
+/// <summary>
+/// Analyzes moves in Quatro to count wins and draws.
+/// Uses transposition tables and symmetry reduction for efficiency.
+/// </summary>
+public static class MoveAnalyzer
 {
     /// <summary>
     /// Order of squares being filled, chosen to maximize the chance of an early win.
@@ -20,7 +45,7 @@ public static class DrawCounter
     /// <summary>
     /// Cache for memoization at each turn depth.
     /// </summary>
-    private static readonly Dictionary<long, long>[] Cache;
+    private static readonly Dictionary<long, GameOutcomes>[] Cache;
 
     /// <summary>
     /// Winning line masks for efficient evaluation.
@@ -43,13 +68,13 @@ public static class DrawCounter
     /// </summary>
     private static readonly List<int>[] MinTranspositions;
 
-    static DrawCounter()
+    static MoveAnalyzer()
     {
         // Initialize cache
-        Cache = new Dictionary<long, long>[MaxLookupIndex];
+        Cache = new Dictionary<long, GameOutcomes>[MaxLookupIndex];
         for (int i = 0; i < MaxLookupIndex; i++)
         {
-            Cache[i] = new Dictionary<long, long>();
+            Cache[i] = new Dictionary<long, GameOutcomes>();
         }
 
         // Initialize masks for winning lines
@@ -197,45 +222,153 @@ public static class DrawCounter
     /// </summary>
     public static long CountDraws()
     {
-        // Clear cache for fresh computation
-        for (int i = 0; i < MaxLookupIndex; i++)
-        {
-            Cache[i].Clear();
-        }
-        return CountDraws(GetStartBoard(), 0);
+        return AnalyzeGame().Draws;
     }
 
     /// <summary>
-    /// Counts the number of possible draw games from a given board state and turn.
+    /// Analyzes all possible game outcomes from the starting position.
     /// </summary>
-    public static long CountDraws(long board, int turn)
+    public static GameOutcomes AnalyzeGame()
+    {
+        // Clear cache for fresh computation
+        ClearCache();
+        return AnalyzeGame(GetStartBoard(), 0);
+    }
+
+    /// <summary>
+    /// Analyzes all possible game outcomes from a given board state and turn.
+    /// </summary>
+    public static GameOutcomes AnalyzeGame(long board, int turn)
     {
         long signature = 0;
         if (turn < MaxLookupIndex)
         {
             signature = GetSignature(board, turn);
-            if (Cache[turn].TryGetValue(signature, out long cached))
+            if (Cache[turn].TryGetValue(signature, out var cached))
                 return cached;
         }
 
         int indexShuffled = IndexShuffle[turn];
-        long count = 0;
+        var outcomes = new GameOutcomes(0, 0, 0);
 
         for (int n = turn; n < 16; n++)
         {
             long newBoard = Swap(board, indexShuffled, IndexShuffle[n]);
+            
+            // Check if this move creates a win
             if (PartialEvaluate(newBoard, indexShuffled))
+            {
+                // The current player (who just placed) wins
+                // Turn 0 = P1 gives, P2 places; Turn 1 = P2 gives, P1 places, etc.
+                // The placer is the one who wins when placing creates 4-in-a-row
+                // At turn N, player ((N+1) % 2 + 1) is placing
+                bool isPlayer1Placing = (turn % 2) == 1;
+                if (isPlayer1Placing)
+                    outcomes = outcomes + new GameOutcomes(1, 0, 0);
+                else
+                    outcomes = outcomes + new GameOutcomes(0, 1, 0);
                 continue;
+            }
+            
             if (turn == 15)
-                count++;
+            {
+                // Board is full with no win - it's a draw
+                outcomes = outcomes + new GameOutcomes(0, 0, 1);
+            }
             else
-                count += CountDraws(newBoard, turn + 1);
+            {
+                outcomes = outcomes + AnalyzeGame(newBoard, turn + 1);
+            }
         }
 
         if (turn < MaxLookupIndex)
-            Cache[turn][signature] = count;
+            Cache[turn][signature] = outcomes;
 
-        return count;
+        return outcomes;
+    }
+
+    /// <summary>
+    /// Analyzes outcomes for selecting a specific piece at the current game state.
+    /// This simulates what happens when the current player gives this piece to their opponent.
+    /// </summary>
+    public static GameOutcomes AnalyzePieceSelection(GameState gameState, Piece piece)
+    {
+        if (!gameState.IsPieceAvailable(piece))
+            return new GameOutcomes(0, 0, 0);
+        
+        // Clone and give the piece
+        var testState = gameState.Clone();
+        testState.GivePiece(piece);
+        
+        return AnalyzeFromGameState(testState);
+    }
+
+    /// <summary>
+    /// Analyzes outcomes for placing the current piece at a specific position.
+    /// </summary>
+    public static GameOutcomes AnalyzePlacement(GameState gameState, int row, int col)
+    {
+        if (!gameState.PieceToPlay.HasValue)
+            return new GameOutcomes(0, 0, 0);
+        
+        if (!gameState.Board.IsEmpty(row, col))
+            return new GameOutcomes(0, 0, 0);
+        
+        // Clone and place the piece
+        var testState = gameState.Clone();
+        testState.PlacePiece(row, col);
+        
+        // Check if this placement wins
+        if (testState.IsGameOver && testState.Winner != 0)
+        {
+            if (testState.Winner == 1)
+                return new GameOutcomes(1, 0, 0);
+            else
+                return new GameOutcomes(0, 1, 0);
+        }
+        
+        return AnalyzeFromGameState(testState);
+    }
+
+    /// <summary>
+    /// Analyzes game outcomes from a GameState object.
+    /// </summary>
+    public static GameOutcomes AnalyzeFromGameState(GameState gameState)
+    {
+        if (gameState.IsGameOver)
+        {
+            if (gameState.Winner == 1)
+                return new GameOutcomes(1, 0, 0);
+            else if (gameState.Winner == 2)
+                return new GameOutcomes(0, 1, 0);
+            else
+                return new GameOutcomes(0, 0, 1);
+        }
+
+        // Convert GameState to compact board representation for analysis
+        // This is a simplified analysis - for full accuracy we'd need to 
+        // track which pieces are available and the current turn properly
+        
+        var outcomes = new GameOutcomes(0, 0, 0);
+        
+        if (gameState.PieceToPlay.HasValue)
+        {
+            // Need to place the piece - try all empty positions
+            foreach (var (row, col) in gameState.Board.GetEmptyCells())
+            {
+                outcomes = outcomes + AnalyzePlacement(gameState, row, col);
+            }
+        }
+        else
+        {
+            // Need to select a piece to give
+            foreach (var piece in gameState.GetAvailablePieces())
+            {
+                outcomes = outcomes + AnalyzePieceSelection(gameState, piece);
+            }
+        }
+        
+        return outcomes;
     }
 
     /// <summary>

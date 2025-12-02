@@ -19,9 +19,11 @@ The goal is to place four pieces in a row (horizontally, vertically, or diagonal
   - `Board` - 4x4 game board
   - `GameState` - Complete game state with efficient serialization (20 bytes)
   - `WinChecker` - Win detection logic
-  - `DrawCounter` - Counts possible draw games using transposition tables and symmetry reduction
+  - `MoveAnalyzer` - Analyzes moves to count P1 wins, P2 wins, and draws
 
 - **Quatro.Wpf** - WPF application for playing the game
+  - Interactive game board and piece selection
+  - Optional move analysis panel (View > Show Move Analysis)
 
 - **Quatro.Core.Tests** - Unit tests for the core library
 
@@ -34,14 +36,22 @@ The game state is designed for efficient serialization to support running many s
 - Flags: 1 byte
 - **Total: 20 bytes**
 
-## Draw Counter
+## Move Analyzer
 
-The `DrawCounter` class provides an efficient algorithm to count the number of possible draw games:
+The `MoveAnalyzer` class provides analysis of game outcomes:
 
 ```csharp
-// Count all possible draw games from the starting position
-long drawCount = DrawCounter.CountDraws();
-Console.WriteLine($"Number of possible draws: {drawCount}");
+// Analyze all outcomes from starting position
+GameOutcomes outcomes = MoveAnalyzer.AnalyzeGame();
+Console.WriteLine($"P1 Wins: {outcomes.Player1Wins}");
+Console.WriteLine($"P2 Wins: {outcomes.Player2Wins}");
+Console.WriteLine($"Draws: {outcomes.Draws}");
+
+// Analyze specific piece selection
+var pieceOutcomes = MoveAnalyzer.AnalyzePieceSelection(gameState, new Piece(5));
+
+// Analyze specific placement
+var placementOutcomes = MoveAnalyzer.AnalyzePlacement(gameState, row, col);
 ```
 
 The algorithm uses:
@@ -49,6 +59,14 @@ The algorithm uses:
 - Transposition tables for symmetry reduction
 - Memoization cache for efficiency
 - Optimized move ordering to maximize early pruning
+
+## Move Analysis Panel
+
+Enable the analysis panel from the menu: **View > Show Move Analysis**
+
+When enabled:
+- Hover over available pieces to see P1 wins, P2 wins, and draws if that piece is given
+- When a piece is selected, hover over empty board positions to see outcomes for that placement
 
 ## Requirements
 
@@ -66,5 +84,3 @@ dotnet build
 ```bash
 dotnet test
 ```
-
-

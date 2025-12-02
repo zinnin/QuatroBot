@@ -29,6 +29,43 @@ public readonly struct GameOutcomes
 }
 
 /// <summary>
+/// Result of minimax evaluation - the guaranteed outcome with optimal play.
+/// </summary>
+public enum MinimaxResult
+{
+    /// <summary>Unknown or still calculating</summary>
+    Unknown = 0,
+    /// <summary>Current player can force a win with optimal play</summary>
+    Win = 1,
+    /// <summary>Current player will lose with optimal play from both sides</summary>
+    Lose = -1,
+    /// <summary>Game will end in a draw with optimal play from both sides</summary>
+    Draw = 2
+}
+
+/// <summary>
+/// Complete analysis result containing both outcome counts and minimax evaluation.
+/// </summary>
+public readonly struct AnalysisResult
+{
+    /// <summary>
+    /// Counts of all possible game outcomes (assuming all moves equally likely).
+    /// </summary>
+    public GameOutcomes Outcomes { get; init; }
+    
+    /// <summary>
+    /// The guaranteed result with optimal play from the current player's perspective.
+    /// </summary>
+    public MinimaxResult OptimalResult { get; init; }
+    
+    public AnalysisResult(GameOutcomes outcomes, MinimaxResult optimalResult)
+    {
+        Outcomes = outcomes;
+        OptimalResult = optimalResult;
+    }
+}
+
+/// <summary>
 /// Analyzes moves in Quatro to count wins and draws.
 /// Uses transposition tables and symmetry reduction for efficiency.
 /// </summary>
@@ -48,6 +85,11 @@ public static class MoveAnalyzer
     /// Cache for memoization at each turn depth. Uses ConcurrentDictionary for thread safety.
     /// </summary>
     private static readonly ConcurrentDictionary<long, GameOutcomes>[] Cache;
+
+    /// <summary>
+    /// Cache for minimax results at each turn depth.
+    /// </summary>
+    private static readonly ConcurrentDictionary<long, MinimaxResult>[] MinimaxCache;
 
     /// <summary>
     /// Winning line masks for efficient evaluation.
@@ -74,9 +116,11 @@ public static class MoveAnalyzer
     {
         // Initialize cache with thread-safe concurrent dictionaries
         Cache = new ConcurrentDictionary<long, GameOutcomes>[MaxLookupIndex];
+        MinimaxCache = new ConcurrentDictionary<long, MinimaxResult>[MaxLookupIndex];
         for (int i = 0; i < MaxLookupIndex; i++)
         {
             Cache[i] = new ConcurrentDictionary<long, GameOutcomes>();
+            MinimaxCache[i] = new ConcurrentDictionary<long, MinimaxResult>();
         }
 
         // Initialize masks for winning lines
@@ -635,6 +679,451 @@ public static class MoveAnalyzer
         for (int i = 0; i < MaxLookupIndex; i++)
         {
             Cache[i].Clear();
+            MinimaxCache[i].Clear();
         }
+    }
+    
+    /// <summary>
+    /// Performs minimax evaluation using the optimized board representation.
+    /// Uses memoization and parallel processing for efficiency.
+    /// </summary>
+    public static MinimaxResult EvaluateMinimaxOptimized(long board, int turn, CancellationToken cancellationToken = default)
+    {
+        if (cancellationToken.IsCancellationRequested)
+            return MinimaxResult.Unknown;
+
+        long signature = 0;
+        if (turn < MaxLookupIndex)
+        {
+            signature = GetSignature(board, turn);
+            if (MinimaxCache[turn].TryGetValue(signature, out var cached))
+                return cached;
+        }
+
+        int indexShuffled = IndexShuffle[turn];
+        int branchCount = 16 - turn;
+        
+        // Use parallel processing when we have enough branches
+        if (branchCount >= 6)
+        {
+            int bestResult = -2; // Start worse than Lose (-1)
+            int hasDraw = 0;
+            
+            var parallelOptions = new ParallelOptions
+            {
+                MaxDegreeOfParallelism = Environment.ProcessorCount * 4
+            };
+
+            try
+            {
+                Parallel.For(turn, 16, parallelOptions, (n, loopState) =>
+                {
+                    if (cancellationToken.IsCancellationRequested || Volatile.Read(ref bestResult) == 1)
+                    {
+                        loopState.Stop();
+                        return;
+                    }
+
+                    long newBoard = Swap(board, indexShuffled, IndexShuffle[n]);
+                    
+                    // Check if this move creates a win
+                    if (PartialEvaluate(newBoard, indexShuffled))
+                    {
+                        // Current player wins
+                        Interlocked.Exchange(ref bestResult, 1);
+                        loopState.Stop();
+                        return;
+                    }
+                    
+                    if (turn == 15)
+                    {
+                        // Draw - no win, no more moves
+                        Interlocked.Exchange(ref hasDraw, 1);
+                    }
+                    else
+                    {
+                        var opponentResult = EvaluateMinimaxOptimized(newBoard, turn + 1, cancellationToken);
+                        
+                        if (opponentResult == MinimaxResult.Unknown)
+                            return;
+                        
+                        // If opponent loses, we win
+                        if (opponentResult == MinimaxResult.Lose)
+                        {
+                            Interlocked.Exchange(ref bestResult, 1);
+                            loopState.Stop();
+                            return;
+                        }
+                        
+                        if (opponentResult == MinimaxResult.Draw)
+                            Interlocked.Exchange(ref hasDraw, 1);
+                    }
+                });
+            }
+            catch (OperationCanceledException)
+            {
+                return MinimaxResult.Unknown;
+            }
+
+            if (cancellationToken.IsCancellationRequested)
+                return MinimaxResult.Unknown;
+
+            MinimaxResult result;
+            if (bestResult == 1)
+                result = MinimaxResult.Win;
+            else if (hasDraw == 1)
+                result = MinimaxResult.Draw;
+            else
+                result = MinimaxResult.Lose;
+            
+            if (!cancellationToken.IsCancellationRequested && turn < MaxLookupIndex)
+                MinimaxCache[turn][signature] = result;
+                
+            return result;
+        }
+        else
+        {
+            // Sequential processing for fewer branches
+            bool foundDraw = false;
+
+            for (int n = turn; n < 16; n++)
+            {
+                if (cancellationToken.IsCancellationRequested)
+                    return MinimaxResult.Unknown;
+
+                long newBoard = Swap(board, indexShuffled, IndexShuffle[n]);
+                
+                // Check if this move creates a win
+                if (PartialEvaluate(newBoard, indexShuffled))
+                {
+                    // Current player wins - cache and return immediately
+                    if (turn < MaxLookupIndex)
+                        MinimaxCache[turn][signature] = MinimaxResult.Win;
+                    return MinimaxResult.Win;
+                }
+                
+                if (turn == 15)
+                {
+                    foundDraw = true;
+                }
+                else
+                {
+                    var opponentResult = EvaluateMinimaxOptimized(newBoard, turn + 1, cancellationToken);
+                    
+                    if (opponentResult == MinimaxResult.Unknown)
+                        return MinimaxResult.Unknown;
+                    
+                    // If opponent loses, we win
+                    if (opponentResult == MinimaxResult.Lose)
+                    {
+                        if (turn < MaxLookupIndex)
+                            MinimaxCache[turn][signature] = MinimaxResult.Win;
+                        return MinimaxResult.Win;
+                    }
+                    
+                    if (opponentResult == MinimaxResult.Draw)
+                        foundDraw = true;
+                }
+            }
+
+            var finalResult = foundDraw ? MinimaxResult.Draw : MinimaxResult.Lose;
+            
+            if (turn < MaxLookupIndex && !cancellationToken.IsCancellationRequested)
+                MinimaxCache[turn][signature] = finalResult;
+
+            return finalResult;
+        }
+    }
+    
+    /// <summary>
+    /// Performs minimax evaluation to determine the guaranteed outcome with optimal play.
+    /// Returns the result from the current player's perspective.
+    /// Uses the optimized board representation for better performance.
+    /// </summary>
+    public static MinimaxResult EvaluateMinimax(GameState gameState, CancellationToken cancellationToken = default)
+    {
+        if (cancellationToken.IsCancellationRequested)
+            return MinimaxResult.Unknown;
+            
+        if (gameState.IsGameOver)
+        {
+            if (gameState.IsDraw)
+                return MinimaxResult.Draw;
+            // If someone won, the current player lost (since they didn't make the winning move)
+            return MinimaxResult.Lose;
+        }
+        
+        // Convert GameState to optimized board representation and use optimized minimax
+        return EvaluateMinimaxFromGameState(gameState, cancellationToken);
+    }
+    
+    /// <summary>
+    /// Evaluates minimax from a GameState by converting to the optimized board format.
+    /// </summary>
+    private static MinimaxResult EvaluateMinimaxFromGameState(GameState gameState, CancellationToken cancellationToken)
+    {
+        if (gameState.PieceToPlay.HasValue)
+        {
+            // Current player needs to place a piece
+            bool hasDraw = false;
+            var emptyCells = gameState.Board.GetEmptyCells().ToList();
+            
+            // Parallelize if enough cells
+            if (emptyCells.Count >= 6)
+            {
+                int bestResult = -2;
+                int foundDraw = 0;
+                
+                var parallelOptions = new ParallelOptions
+                {
+                    MaxDegreeOfParallelism = Environment.ProcessorCount * 4
+                };
+
+                try
+                {
+                    Parallel.ForEach(emptyCells, parallelOptions, (cell, loopState) =>
+                    {
+                        if (cancellationToken.IsCancellationRequested || Volatile.Read(ref bestResult) == 1)
+                        {
+                            loopState.Stop();
+                            return;
+                        }
+                        
+                        var testState = gameState.Clone();
+                        testState.PlacePiece(cell.Row, cell.Col);
+                        
+                        if (testState.IsGameOver && testState.Winner != 0)
+                        {
+                            Interlocked.Exchange(ref bestResult, 1);
+                            loopState.Stop();
+                            return;
+                        }
+                        
+                        var opponentResult = EvaluateMinimaxFromGameState(testState, cancellationToken);
+                        
+                        if (opponentResult == MinimaxResult.Lose)
+                        {
+                            Interlocked.Exchange(ref bestResult, 1);
+                            loopState.Stop();
+                            return;
+                        }
+                        
+                        if (opponentResult == MinimaxResult.Draw)
+                            Interlocked.Exchange(ref foundDraw, 1);
+                    });
+                }
+                catch (OperationCanceledException)
+                {
+                    return MinimaxResult.Unknown;
+                }
+
+                if (cancellationToken.IsCancellationRequested)
+                    return MinimaxResult.Unknown;
+
+                if (bestResult == 1) return MinimaxResult.Win;
+                if (foundDraw == 1) return MinimaxResult.Draw;
+                return MinimaxResult.Lose;
+            }
+            else
+            {
+                foreach (var cell in emptyCells)
+                {
+                    if (cancellationToken.IsCancellationRequested)
+                        return MinimaxResult.Unknown;
+                        
+                    var testState = gameState.Clone();
+                    testState.PlacePiece(cell.Row, cell.Col);
+                    
+                    if (testState.IsGameOver && testState.Winner != 0)
+                        return MinimaxResult.Win;
+                    
+                    var opponentResult = EvaluateMinimaxFromGameState(testState, cancellationToken);
+                    
+                    if (opponentResult == MinimaxResult.Unknown)
+                        return MinimaxResult.Unknown;
+                    if (opponentResult == MinimaxResult.Lose)
+                        return MinimaxResult.Win;
+                    if (opponentResult == MinimaxResult.Draw)
+                        hasDraw = true;
+                }
+                
+                return hasDraw ? MinimaxResult.Draw : MinimaxResult.Lose;
+            }
+        }
+        else
+        {
+            // Current player needs to give a piece
+            var availablePieces = gameState.GetAvailablePieces().ToList();
+            bool hasDraw = false;
+            
+            if (availablePieces.Count >= 6)
+            {
+                int bestResult = -2;
+                int foundDraw = 0;
+                
+                var parallelOptions = new ParallelOptions
+                {
+                    MaxDegreeOfParallelism = Environment.ProcessorCount * 4
+                };
+
+                try
+                {
+                    Parallel.ForEach(availablePieces, parallelOptions, (piece, loopState) =>
+                    {
+                        if (cancellationToken.IsCancellationRequested || Volatile.Read(ref bestResult) == 1)
+                        {
+                            loopState.Stop();
+                            return;
+                        }
+                        
+                        var testState = gameState.Clone();
+                        testState.GivePiece(piece);
+                        
+                        var opponentResult = EvaluateMinimaxFromGameState(testState, cancellationToken);
+                        
+                        if (opponentResult == MinimaxResult.Lose)
+                        {
+                            Interlocked.Exchange(ref bestResult, 1);
+                            loopState.Stop();
+                            return;
+                        }
+                        
+                        if (opponentResult == MinimaxResult.Draw)
+                            Interlocked.Exchange(ref foundDraw, 1);
+                    });
+                }
+                catch (OperationCanceledException)
+                {
+                    return MinimaxResult.Unknown;
+                }
+
+                if (cancellationToken.IsCancellationRequested)
+                    return MinimaxResult.Unknown;
+
+                if (bestResult == 1) return MinimaxResult.Win;
+                if (foundDraw == 1) return MinimaxResult.Draw;
+                return MinimaxResult.Lose;
+            }
+            else
+            {
+                foreach (var piece in availablePieces)
+                {
+                    if (cancellationToken.IsCancellationRequested)
+                        return MinimaxResult.Unknown;
+                        
+                    var testState = gameState.Clone();
+                    testState.GivePiece(piece);
+                    
+                    var opponentResult = EvaluateMinimaxFromGameState(testState, cancellationToken);
+                    
+                    if (opponentResult == MinimaxResult.Unknown)
+                        return MinimaxResult.Unknown;
+                    if (opponentResult == MinimaxResult.Lose)
+                        return MinimaxResult.Win;
+                    if (opponentResult == MinimaxResult.Draw)
+                        hasDraw = true;
+                }
+                
+                return hasDraw ? MinimaxResult.Draw : MinimaxResult.Lose;
+            }
+        }
+    }
+    
+    /// <summary>
+    /// Analyzes a piece selection with both outcome counting and minimax evaluation.
+    /// </summary>
+    public static AnalysisResult AnalyzePieceSelectionFull(GameState gameState, Piece piece, CancellationToken cancellationToken = default)
+    {
+        if (!gameState.IsPieceAvailable(piece))
+            return new AnalysisResult(new GameOutcomes(0, 0, 0), MinimaxResult.Unknown);
+        
+        if (cancellationToken.IsCancellationRequested)
+            return new AnalysisResult(new GameOutcomes(0, 0, 0), MinimaxResult.Unknown);
+        
+        // Clone and give the piece
+        var testState = gameState.Clone();
+        testState.GivePiece(piece);
+        
+        // Run both analyses in parallel
+        var outcomesTask = Task.Run(() => AnalyzeFromGameState(testState, cancellationToken), cancellationToken);
+        var minimaxTask = Task.Run(() => EvaluateMinimax(testState, cancellationToken), cancellationToken);
+        
+        try
+        {
+            Task.WaitAll(new Task[] { outcomesTask, minimaxTask }, cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            return new AnalysisResult(new GameOutcomes(0, 0, 0), MinimaxResult.Unknown);
+        }
+        
+        var outcomes = outcomesTask.Result;
+        var minimax = minimaxTask.Result;
+        
+        // The minimax result is from the opponent's perspective (they place next)
+        // So we need to invert it for the current player
+        var currentPlayerMinimax = minimax switch
+        {
+            MinimaxResult.Win => MinimaxResult.Lose,
+            MinimaxResult.Lose => MinimaxResult.Win,
+            _ => minimax
+        };
+        
+        return new AnalysisResult(outcomes, currentPlayerMinimax);
+    }
+    
+    /// <summary>
+    /// Analyzes a placement with both outcome counting and minimax evaluation.
+    /// </summary>
+    public static AnalysisResult AnalyzePlacementFull(GameState gameState, int row, int col, CancellationToken cancellationToken = default)
+    {
+        if (!gameState.PieceToPlay.HasValue)
+            return new AnalysisResult(new GameOutcomes(0, 0, 0), MinimaxResult.Unknown);
+        
+        if (!gameState.Board.IsEmpty(row, col))
+            return new AnalysisResult(new GameOutcomes(0, 0, 0), MinimaxResult.Unknown);
+        
+        if (cancellationToken.IsCancellationRequested)
+            return new AnalysisResult(new GameOutcomes(0, 0, 0), MinimaxResult.Unknown);
+        
+        // Clone and place the piece
+        var testState = gameState.Clone();
+        testState.PlacePiece(row, col);
+        
+        // Check if this placement wins
+        if (testState.IsGameOver && testState.Winner != 0)
+        {
+            var winOutcomes = testState.Winner == 1 
+                ? new GameOutcomes(1, 0, 0) 
+                : new GameOutcomes(0, 1, 0);
+            return new AnalysisResult(winOutcomes, MinimaxResult.Win);
+        }
+        
+        // Run both analyses in parallel
+        var outcomesTask = Task.Run(() => AnalyzeFromGameState(testState, cancellationToken), cancellationToken);
+        var minimaxTask = Task.Run(() => EvaluateMinimax(testState, cancellationToken), cancellationToken);
+        
+        try
+        {
+            Task.WaitAll(new Task[] { outcomesTask, minimaxTask }, cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            return new AnalysisResult(new GameOutcomes(0, 0, 0), MinimaxResult.Unknown);
+        }
+        
+        var outcomes = outcomesTask.Result;
+        var minimax = minimaxTask.Result;
+        
+        // The minimax result is from the opponent's perspective (they select a piece next)
+        // So we need to invert it for the current player
+        var currentPlayerMinimax = minimax switch
+        {
+            MinimaxResult.Win => MinimaxResult.Lose,
+            MinimaxResult.Lose => MinimaxResult.Win,
+            _ => minimax
+        };
+        
+        return new AnalysisResult(outcomes, currentPlayerMinimax);
     }
 }

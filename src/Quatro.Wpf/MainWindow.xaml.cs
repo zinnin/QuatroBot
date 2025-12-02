@@ -161,13 +161,13 @@ public partial class MainWindow : Window
         try
         {
             // Run analysis on background thread
-            var outcomes = await Task.Run(() => 
-                MoveAnalyzer.AnalyzePlacement(gameStateCopy, row, col, token), token);
+            var result = await Task.Run(() => 
+                MoveAnalyzer.AnalyzePlacementFull(gameStateCopy, row, col, token), token);
             
             // Update UI on main thread (only if not cancelled)
             if (!token.IsCancellationRequested)
             {
-                UpdateAnalysisDisplay(outcomes, $"Place at ({row}, {col})");
+                UpdateAnalysisDisplay(result, $"Place at ({row}, {col})");
             }
         }
         catch (OperationCanceledException)
@@ -227,13 +227,13 @@ public partial class MainWindow : Window
         try
         {
             // Run analysis on background thread
-            var outcomes = await Task.Run(() => 
-                MoveAnalyzer.AnalyzePieceSelection(gameStateCopy, piece, token), token);
+            var result = await Task.Run(() => 
+                MoveAnalyzer.AnalyzePieceSelectionFull(gameStateCopy, piece, token), token);
             
             // Update UI on main thread (only if not cancelled)
             if (!token.IsCancellationRequested)
             {
-                UpdateAnalysisDisplay(outcomes, $"Give piece {piece}");
+                UpdateAnalysisDisplay(result, $"Give piece {piece}");
             }
         }
         catch (OperationCanceledException)
@@ -270,24 +270,51 @@ public partial class MainWindow : Window
 
     private void ShowAnalysisLoading()
     {
+        OptimalResultText.Text = "Calculating...";
+        OptimalResultText.Foreground = new SolidColorBrush(Colors.White);
         Player1WinsText.Text = "P1 Wins: calculating...";
         Player2WinsText.Text = "P2 Wins: calculating...";
         DrawsText.Text = "Draws: calculating...";
         TotalGamesText.Text = "Total: calculating...";
     }
 
-    private void UpdateAnalysisDisplay(GameOutcomes outcomes, string description)
+    private void UpdateAnalysisDisplay(AnalysisResult result, string description)
     {
         AnalysisText.Text = description;
-        Player1WinsText.Text = $"P1 Wins: {outcomes.Player1Wins:N0}";
-        Player2WinsText.Text = $"P2 Wins: {outcomes.Player2Wins:N0}";
-        DrawsText.Text = $"Draws: {outcomes.Draws:N0}";
-        TotalGamesText.Text = $"Total: {outcomes.TotalGames:N0}";
+        
+        // Update optimal play result
+        switch (result.OptimalResult)
+        {
+            case MinimaxResult.Win:
+                OptimalResultText.Text = "You can WIN with optimal play!";
+                OptimalResultText.Foreground = new SolidColorBrush(Color.FromRgb(0x88, 0xFF, 0x88));
+                break;
+            case MinimaxResult.Lose:
+                OptimalResultText.Text = "You will LOSE with optimal play";
+                OptimalResultText.Foreground = new SolidColorBrush(Color.FromRgb(0xFF, 0x88, 0x88));
+                break;
+            case MinimaxResult.Draw:
+                OptimalResultText.Text = "DRAW with optimal play";
+                OptimalResultText.Foreground = new SolidColorBrush(Color.FromRgb(0xFF, 0xFF, 0x88));
+                break;
+            default:
+                OptimalResultText.Text = "Unknown";
+                OptimalResultText.Foreground = new SolidColorBrush(Colors.White);
+                break;
+        }
+        
+        // Update outcome counts
+        Player1WinsText.Text = $"P1 Wins: {result.Outcomes.Player1Wins:N0}";
+        Player2WinsText.Text = $"P2 Wins: {result.Outcomes.Player2Wins:N0}";
+        DrawsText.Text = $"Draws: {result.Outcomes.Draws:N0}";
+        TotalGamesText.Text = $"Total: {result.Outcomes.TotalGames:N0}";
     }
 
     private void ClearAnalysisDisplay()
     {
         AnalysisText.Text = "Hover over pieces or board positions to see analysis.";
+        OptimalResultText.Text = "-";
+        OptimalResultText.Foreground = new SolidColorBrush(Colors.White);
         Player1WinsText.Text = "P1 Wins: -";
         Player2WinsText.Text = "P2 Wins: -";
         DrawsText.Text = "Draws: -";

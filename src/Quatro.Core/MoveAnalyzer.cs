@@ -239,9 +239,14 @@ public static class MoveAnalyzer
 
     /// <summary>
     /// Analyzes all possible game outcomes from a given board state and turn.
+    /// Uses parallel processing at early turns for better CPU utilization.
     /// </summary>
-    public static GameOutcomes AnalyzeGame(long board, int turn)
+    public static GameOutcomes AnalyzeGame(long board, int turn, CancellationToken cancellationToken = default)
     {
+        // Check for cancellation without throwing
+        if (cancellationToken.IsCancellationRequested)
+            return new GameOutcomes(0, 0, 0);
+
         long signature = 0;
         if (turn < MaxLookupIndex)
         {
@@ -251,42 +256,106 @@ public static class MoveAnalyzer
         }
 
         int indexShuffled = IndexShuffle[turn];
-        var outcomes = new GameOutcomes(0, 0, 0);
-
-        for (int n = turn; n < 16; n++)
+        
+        // Use parallel processing at early turns where we have more branches
+        // At turn 0, we have 16 choices; at turn 1, 15 choices, etc.
+        // Parallelize the first few turns for maximum CPU utilization
+        if (turn < 3)
         {
-            long newBoard = Swap(board, indexShuffled, IndexShuffle[n]);
+            long p1Wins = 0, p2Wins = 0, draws = 0;
             
-            // Check if this move creates a win
-            if (PartialEvaluate(newBoard, indexShuffled))
+            var parallelOptions = new ParallelOptions
             {
-                // The current player (who just placed) wins
-                // Turn 0 = P1 gives, P2 places; Turn 1 = P2 gives, P1 places, etc.
-                // The placer is the one who wins when placing creates 4-in-a-row
-                // At turn N, player ((N+1) % 2 + 1) is placing
-                bool isPlayer1Placing = (turn % 2) == 1;
-                if (isPlayer1Placing)
-                    outcomes = outcomes + new GameOutcomes(1, 0, 0);
-                else
-                    outcomes = outcomes + new GameOutcomes(0, 1, 0);
-                continue;
+                MaxDegreeOfParallelism = Environment.ProcessorCount
+            };
+
+            try
+            {
+                Parallel.For(turn, 16, parallelOptions, (n, loopState) =>
+                {
+                    if (cancellationToken.IsCancellationRequested)
+                    {
+                        loopState.Stop();
+                        return;
+                    }
+
+                    long newBoard = Swap(board, indexShuffled, IndexShuffle[n]);
+                    
+                    // Check if this move creates a win
+                    if (PartialEvaluate(newBoard, indexShuffled))
+                    {
+                        bool isPlayer1Placing = (turn % 2) == 1;
+                        if (isPlayer1Placing)
+                            Interlocked.Add(ref p1Wins, 1);
+                        else
+                            Interlocked.Add(ref p2Wins, 1);
+                        return;
+                    }
+                    
+                    if (turn == 15)
+                    {
+                        Interlocked.Add(ref draws, 1);
+                    }
+                    else
+                    {
+                        var result = AnalyzeGame(newBoard, turn + 1, cancellationToken);
+                        Interlocked.Add(ref p1Wins, result.Player1Wins);
+                        Interlocked.Add(ref p2Wins, result.Player2Wins);
+                        Interlocked.Add(ref draws, result.Draws);
+                    }
+                });
             }
+            catch (OperationCanceledException)
+            {
+                // Parallel loop was cancelled, return partial results collected so far
+            }
+
+            var outcomes = new GameOutcomes(p1Wins, p2Wins, draws);
             
-            if (turn == 15)
-            {
-                // Board is full with no win - it's a draw
-                outcomes = outcomes + new GameOutcomes(0, 0, 1);
-            }
-            else
-            {
-                outcomes = outcomes + AnalyzeGame(newBoard, turn + 1);
-            }
+            // Only cache if not cancelled (to avoid caching partial results)
+            if (!cancellationToken.IsCancellationRequested && turn < MaxLookupIndex)
+                Cache[turn][signature] = outcomes;
+                
+            return outcomes;
         }
+        else
+        {
+            // Sequential processing for deeper turns (already enough parallelism from above)
+            var outcomes = new GameOutcomes(0, 0, 0);
 
-        if (turn < MaxLookupIndex)
-            Cache[turn][signature] = outcomes;
+            for (int n = turn; n < 16; n++)
+            {
+                if (cancellationToken.IsCancellationRequested)
+                    return new GameOutcomes(0, 0, 0);
 
-        return outcomes;
+                long newBoard = Swap(board, indexShuffled, IndexShuffle[n]);
+                
+                // Check if this move creates a win
+                if (PartialEvaluate(newBoard, indexShuffled))
+                {
+                    bool isPlayer1Placing = (turn % 2) == 1;
+                    if (isPlayer1Placing)
+                        outcomes = outcomes + new GameOutcomes(1, 0, 0);
+                    else
+                        outcomes = outcomes + new GameOutcomes(0, 1, 0);
+                    continue;
+                }
+                
+                if (turn == 15)
+                {
+                    outcomes = outcomes + new GameOutcomes(0, 0, 1);
+                }
+                else
+                {
+                    outcomes = outcomes + AnalyzeGame(newBoard, turn + 1, cancellationToken);
+                }
+            }
+
+            if (turn < MaxLookupIndex && !cancellationToken.IsCancellationRequested)
+                Cache[turn][signature] = outcomes;
+
+            return outcomes;
+        }
     }
 
     /// <summary>
@@ -298,7 +367,9 @@ public static class MoveAnalyzer
         if (!gameState.IsPieceAvailable(piece))
             return new GameOutcomes(0, 0, 0);
         
-        cancellationToken.ThrowIfCancellationRequested();
+        // Check for cancellation without throwing
+        if (cancellationToken.IsCancellationRequested)
+            return new GameOutcomes(0, 0, 0);
         
         // Clone and give the piece
         var testState = gameState.Clone();
@@ -318,7 +389,9 @@ public static class MoveAnalyzer
         if (!gameState.Board.IsEmpty(row, col))
             return new GameOutcomes(0, 0, 0);
         
-        cancellationToken.ThrowIfCancellationRequested();
+        // Check for cancellation without throwing
+        if (cancellationToken.IsCancellationRequested)
+            return new GameOutcomes(0, 0, 0);
         
         // Clone and place the piece
         var testState = gameState.Clone();
@@ -341,6 +414,9 @@ public static class MoveAnalyzer
     /// </summary>
     public static GameOutcomes AnalyzeFromGameState(GameState gameState, CancellationToken cancellationToken = default)
     {
+        if (cancellationToken.IsCancellationRequested)
+            return new GameOutcomes(0, 0, 0);
+
         if (gameState.IsGameOver)
         {
             if (gameState.Winner == 1)
@@ -351,42 +427,55 @@ public static class MoveAnalyzer
                 return new GameOutcomes(0, 0, 1);
         }
 
-        // Use parallel processing for better CPU utilization
+        long p1Wins = 0, p2Wins = 0, draws = 0;
+        
         var parallelOptions = new ParallelOptions
         {
-            CancellationToken = cancellationToken,
             MaxDegreeOfParallelism = Environment.ProcessorCount
         };
 
-        long p1Wins = 0, p2Wins = 0, draws = 0;
-        
-        if (gameState.PieceToPlay.HasValue)
+        try
         {
-            // Need to place the piece - try all empty positions in parallel
-            var emptyCells = gameState.Board.GetEmptyCells().ToList();
-            
-            Parallel.ForEach(emptyCells, parallelOptions, (cell) =>
+            if (gameState.PieceToPlay.HasValue)
             {
-                cancellationToken.ThrowIfCancellationRequested();
-                var result = AnalyzePlacement(gameState, cell.Row, cell.Col, cancellationToken);
-                Interlocked.Add(ref p1Wins, result.Player1Wins);
-                Interlocked.Add(ref p2Wins, result.Player2Wins);
-                Interlocked.Add(ref draws, result.Draws);
-            });
+                // Need to place the piece - try all empty positions in parallel
+                var emptyCells = gameState.Board.GetEmptyCells().ToList();
+                
+                Parallel.ForEach(emptyCells, parallelOptions, (cell, loopState) =>
+                {
+                    if (cancellationToken.IsCancellationRequested)
+                    {
+                        loopState.Stop();
+                        return;
+                    }
+                    var result = AnalyzePlacement(gameState, cell.Row, cell.Col, cancellationToken);
+                    Interlocked.Add(ref p1Wins, result.Player1Wins);
+                    Interlocked.Add(ref p2Wins, result.Player2Wins);
+                    Interlocked.Add(ref draws, result.Draws);
+                });
+            }
+            else
+            {
+                // Need to select a piece to give - process in parallel
+                var availablePieces = gameState.GetAvailablePieces().ToList();
+                
+                Parallel.ForEach(availablePieces, parallelOptions, (piece, loopState) =>
+                {
+                    if (cancellationToken.IsCancellationRequested)
+                    {
+                        loopState.Stop();
+                        return;
+                    }
+                    var result = AnalyzePieceSelection(gameState, piece, cancellationToken);
+                    Interlocked.Add(ref p1Wins, result.Player1Wins);
+                    Interlocked.Add(ref p2Wins, result.Player2Wins);
+                    Interlocked.Add(ref draws, result.Draws);
+                });
+            }
         }
-        else
+        catch (OperationCanceledException)
         {
-            // Need to select a piece to give - process in parallel
-            var availablePieces = gameState.GetAvailablePieces().ToList();
-            
-            Parallel.ForEach(availablePieces, parallelOptions, (piece) =>
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                var result = AnalyzePieceSelection(gameState, piece, cancellationToken);
-                Interlocked.Add(ref p1Wins, result.Player1Wins);
-                Interlocked.Add(ref p2Wins, result.Player2Wins);
-                Interlocked.Add(ref draws, result.Draws);
-            });
+            // Gracefully handle cancellation
         }
         
         return new GameOutcomes(p1Wins, p2Wins, draws);
